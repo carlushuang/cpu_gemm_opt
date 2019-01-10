@@ -1,5 +1,6 @@
 #include "gemm_driver.h"
 
+#include <stdio.h>
 #include <assert.h>
 #include <iostream>
 #include <string>
@@ -131,8 +132,8 @@ struct bench_result{
     }
 };
 
-#define LOOPS 100
-#define LOOP_WARMUP 2
+#define LOOPS 5
+#define LOOP_WARMUP 1
 
 class gemm_problem_t{
 public:
@@ -242,6 +243,75 @@ bench_result gemm_problem_t::run_bench<cblas_sgemm_t>(cblas_sgemm_t cblas_gemm_f
     return run_bench(gemm_func, validate_only);
 }
 
+class gemm_bench{
+public:
+    struct config{
+        int m;
+        int n;
+        int k;
+        float alpha;
+        float beta;
+        layout_t layout;
+        trans_t trans_a;
+        trans_t trans_b;
+        // TODO: layout, trans
+    };
+
+
+    bool next_config(config * cfg){
+        static int ITER_START = 32;
+        static int ITER_STEP = 32;
+        static int ITER_END = 1024;
+        static float ALPHA = 1.0f;
+        static float BETA  = 1.0f;
+
+        static int current_iter = ITER_START;
+        static bool need_stop = false;
+        if(need_stop)
+            return false;
+
+        cfg->m = current_iter;
+        cfg->n = current_iter;
+        cfg->k = current_iter;
+        cfg->alpha = ALPHA;
+        cfg->beta = BETA;
+        cfg->layout = LAYOUT_ROW_MAJOR;
+        cfg->trans_a = TRANS_NO_TRANS;
+        cfg->trans_b = TRANS_NO_TRANS;
+
+        auto update_func = [&](){
+            int step;
+            if(current_iter < 256)
+                step = ITER_STEP;
+            else if(current_iter < 512)
+                step = ITER_STEP * 2;
+            else
+                step = ITER_STEP * 4;
+
+            current_iter += step;
+            if(current_iter > ITER_END)
+                need_stop = true;
+        };
+        update_func();
+
+        return true;
+    }
+
+    void run(){
+        config cfg;
+        printf("    M    N    K alpha beta   gflops(ms)   gflops_ref(ms)\n");
+        while(next_config(&cfg)){
+            gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,16);
+            bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, false);
+            bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, false);
+            printf(" %4d %4d %4d  %.1f  %.1f %6.2f(%5.2f) %6.2f(%5.2f)\n",
+                cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,
+                rtn_opt.gflops,rtn_opt.time_ms,rtn_ref.gflops,rtn_ref.time_ms);
+        }
+    }
+
+};
+
 #define MEM_ALIGN_BYTE "16"
 int main(int argc, char ** argv){
     arg_parser args("gemm");
@@ -256,9 +326,10 @@ int main(int argc, char ** argv){
     args.insert_arg("tb", "translation for B, no|trans", "no");
     args.insert_arg("align", "memory alignment for matrix, in byte", MEM_ALIGN_BYTE);
     args.insert_arg("valid", "validate the result", "0");
+    args.insert_arg("bench", "benchmark mode, for all config", "1");
 
     if(!args.parse(argc-1, argv+1)) return -1;
-    args.dump_parsed();
+    //args.dump_parsed();
 
     int m = args.get_arg<int>("m");
     int n = args.get_arg<int>("n");
@@ -274,16 +345,22 @@ int main(int argc, char ** argv){
     trans_t trans_a = args.get_arg_choice<trans_t>("ta", trans_map);
     trans_t trans_b = args.get_arg_choice<trans_t>("tb", trans_map);
     int align = args.get_arg<int>("align");
-    bool valid = args.get_arg<int>("valid") ? true:false;
-
-    gemm_problem_t gemm_prob(m,n,k,alpha,beta,layout,trans_a,trans_b,align);
+    bool valid = (args.get_arg<int>("valid")==1) ? true:false;
+    bool is_bench = (args.get_arg<int>("bench")==1) ? true:false;
 
     // force single thread openblas
     openblas_set_num_threads(1);
 
+    if(is_bench){
+        gemm_bench gb;
+        gb.run();
+        return 0;
+    }
+    args.dump_parsed();
+
+    gemm_problem_t gemm_prob(m,n,k,alpha,beta,layout,trans_a,trans_b,align);
     bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, valid);
     bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, valid);
-
 
     if(valid){
         bool result = valid_matrix(rtn_ref.c, rtn_opt.c, 0.001f);
