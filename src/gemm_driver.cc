@@ -169,6 +169,9 @@ public:
     template<typename F>
     bench_result run_bench(F gemm_func, bool validate_only = false){
         matrix_fp32_t * c_out = new matrix_fp32_t(*C);
+        std::cout<<"[blas]layout:"<<layout<<", trans_a:"<<trans_a<<", trans_b:"<<trans_b<<
+            ", m:"<<m<<", n:"<<n<<", k:"<<k<<", alpha:"<<alpha<<", beta:"<<beta<<
+            ", lda:"<<A->h_stride<<", ldb:"<<B->h_stride<<", ldc:"<<c_out->h_stride<<std::endl;
         if(validate_only){
             // validate mode, only care about result
             gemm_func(layout,trans_a,trans_b,
@@ -364,7 +367,7 @@ int main(int argc, char ** argv){
 
     if(valid){
         bool result = valid_matrix(rtn_ref.c, rtn_opt.c, 0.001f);
-        std::cout<<"valid reault:"<<(result?"ok":"diff")<<std::endl;
+        std::cout<<"valid result:"<<(result?"ok":"diff")<<std::endl;
     }else{
         std::cout<<"[ref] gflops:"<<rtn_ref.gflops<<", time:"<<rtn_ref.time_ms<<"ms"<<std::endl;
         std::cout<<"[opt] gflops:"<<rtn_opt.gflops<<", time:"<<rtn_opt.time_ms<<"ms"<<std::endl;

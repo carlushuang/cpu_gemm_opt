@@ -250,7 +250,7 @@ static inline bool valid_matrix(const matrix_fp32_t *ma, const matrix_fp32_t * m
     int errs = 0;
     assert(ma && mb);
     assert(ma->elem() == mb->elem());
-    std::cout<<"ma:"<<ma->elem()<<", mb:"<<mb->elem()<<std::endl;
+    //std::cout<<"ma:"<<ma->elem()<<", mb:"<<mb->elem()<<std::endl;
     for(i=0;i<(int) (ma->elem());i++){
         float d = ma->data[i] - mb->data[i];
         d = ABS(d);
