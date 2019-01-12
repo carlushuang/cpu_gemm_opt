@@ -198,7 +198,7 @@ public:
         this->data = (float *) __aligned_malloc(sizeof(float)*elem(), alignment_);
         rand_vector_f32(this->data, elem());
 
-        std::tie(h_stride, h, w) = matrix_cvt_t()(row,col,inc_row,inc_col,layout,trans);
+        std::tie(h, w, h_stride) = matrix_cvt_t()(row,col,inc_row,inc_col,layout,trans);
     }
     ~matrix_fp32_t(){
         __aligned_free(this->data);
@@ -213,7 +213,7 @@ public:
         this->trans = rhs.trans;
         this->alignment = rhs.alignment;
         this->data = (float *) __aligned_malloc(sizeof(float)*elem(), alignment);
-        std::tie(h_stride, h, w) = matrix_cvt_t()(row,col,inc_row,inc_col,layout,trans);
+        std::tie(h, w, h_stride) = matrix_cvt_t()(row,col,inc_row,inc_col,layout,trans);
         memcpy(this->data, rhs.data, sizeof(float)*elem());
     }
 

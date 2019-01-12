@@ -152,7 +152,8 @@ public:
         int row, col, inc_row, inc_col;
         std::tie(row, col, inc_row, inc_col) = gemm_desc->get_a();
         A = new matrix_fp32_t(row, col, inc_row, inc_col, layout, trans_a, align);
-    
+        
+
         std::tie(row, col, inc_row, inc_col) = gemm_desc->get_b();
         B = new matrix_fp32_t(row, col, inc_row, inc_col, layout, trans_b, align);
 
@@ -169,9 +170,9 @@ public:
     template<typename F>
     bench_result run_bench(F gemm_func, bool validate_only = false){
         matrix_fp32_t * c_out = new matrix_fp32_t(*C);
-        std::cout<<"[blas]layout:"<<layout<<", trans_a:"<<trans_a<<", trans_b:"<<trans_b<<
-            ", m:"<<m<<", n:"<<n<<", k:"<<k<<", alpha:"<<alpha<<", beta:"<<beta<<
-            ", lda:"<<A->h_stride<<", ldb:"<<B->h_stride<<", ldc:"<<c_out->h_stride<<std::endl;
+        //std::cout<<"[blas]layout:"<<layout<<", trans_a:"<<trans_a<<", trans_b:"<<trans_b<<
+        //    ", m:"<<m<<", n:"<<n<<", k:"<<k<<", alpha:"<<alpha<<", beta:"<<beta<<
+        //    ", lda:"<<A->h_stride<<", ldb:"<<B->h_stride<<", ldc:"<<c_out->h_stride<<std::endl;
         if(validate_only){
             // validate mode, only care about result
             gemm_func(layout,trans_a,trans_b,
@@ -249,17 +250,16 @@ bench_result gemm_problem_t::run_bench<cblas_sgemm_t>(cblas_sgemm_t cblas_gemm_f
 class gemm_bench{
 public:
     struct config{
-        int m;
-        int n;
-        int k;
-        float alpha;
-        float beta;
-        layout_t layout;
-        trans_t trans_a;
-        trans_t trans_b;
+        int m=0;
+        int n=0;
+        int k=0;
+        float alpha=.0f;
+        float beta=.0f;
+        layout_t layout=LAYOUT_ROW_MAJOR;
+        trans_t trans_a=TRANS_NO_TRANS;
+        trans_t trans_b=TRANS_NO_TRANS;
         // TODO: layout, trans
     };
-
 
     bool next_config(config * cfg){
         static int ITER_START = 32;
@@ -299,17 +299,77 @@ public:
 
         return true;
     }
+    bool next_config_valid(config * cfg){
+        int Ms[] = {64,128,256,512,768,1024};
+        int Ns[] = {64,128,256,512,768};
+        int Ks[] = {64,128,256,512,768};
+        float alphas[] = {1.0f, 2.1f};
+        float betas[] = {1.0f, .0f, 1.6f};
+#define ARRAY_LEN(arr) (sizeof(arr)/sizeof(arr[0]))
+        static size_t  M_idx=0;
+        static size_t  N_idx=0;
+        static size_t  K_idx=0;
+        static size_t  alpha_idx=0;
+        static size_t  beta_idx=0;
+        static bool need_stop = false;
+        if(need_stop)
+            return false;
 
-    void run(){
+        cfg->m = Ms[M_idx];
+        cfg->n = Ns[N_idx];
+        cfg->k = Ks[K_idx];
+        cfg->alpha = alphas[alpha_idx];
+        cfg->beta = betas[beta_idx];
+        cfg->layout = LAYOUT_ROW_MAJOR;
+        cfg->trans_a = TRANS_NO_TRANS;
+        cfg->trans_b = TRANS_NO_TRANS;
+
+        // next
+        if(++beta_idx >= ARRAY_LEN(betas)){
+            beta_idx = 0;
+            if(++alpha_idx >= ARRAY_LEN(alphas)){
+                alpha_idx = 0;
+                if(++K_idx >= ARRAY_LEN(Ks)){
+                    K_idx = 0;
+                    if(++N_idx >= ARRAY_LEN(Ns)){
+                        N_idx = 0;
+                        if(++M_idx >= ARRAY_LEN(Ms)){
+                            M_idx = 0;
+                            need_stop = true;
+                        }
+                    }
+                }
+            }
+        }
+#undef ARRAY_LEN
+
+        return true;
+    }
+
+    void run( bool validate_only = false){
         config cfg;
         printf("    M    N    K alpha beta   gflops(ms)   gflops_ref(ms)\n");
-        while(next_config(&cfg)){
+        while(1){
+            bool have_next = validate_only?
+                next_config_valid(&cfg):
+                next_config(&cfg);
+            if(!have_next)
+                break;
             gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,16);
-            bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, false);
-            bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, false);
-            printf(" %4d %4d %4d  %.1f  %.1f %6.2f(%5.2f) %6.2f(%5.2f)\n",
+            bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, validate_only);
+            bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, validate_only);
+            
+            printf(" %4d %4d %4d  %.1f  %.1f %6.2f(%5.2f) %6.2f(%5.2f)",
                 cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,
                 rtn_opt.gflops,rtn_opt.time_ms,rtn_ref.gflops,rtn_ref.time_ms);
+            if(validate_only){
+                bool result = valid_matrix(rtn_ref.c, rtn_opt.c, 0.001f);
+                if(result)
+                    printf("  <valid>");
+                else
+                    printf("  <fail>");
+            }
+            printf("\n");
         }
     }
 
@@ -356,7 +416,7 @@ int main(int argc, char ** argv){
 
     if(is_bench){
         gemm_bench gb;
-        gb.run();
+        gb.run(valid);
         return 0;
     }
     args.dump_parsed();
