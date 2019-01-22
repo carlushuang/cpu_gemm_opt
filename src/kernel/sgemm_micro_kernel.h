@@ -3,8 +3,10 @@
 
 
 void sgemm_micro_kernel(int m, int n, int k,
+    float alpha,
     const float  *   A,
     const float *   B,
+    float beta,
     float *  C,
     int ldc);
 

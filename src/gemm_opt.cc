@@ -83,10 +83,11 @@ static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_
 *
 * pack_A convert to col major for each tile
 */
-static void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_buf){
+static void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_buf, float alpha){
     int mr,mr_sz, k, i;
     const float * ptr_a = A;
     float * ptr_a_pack = pack_buf;
+    (void)alpha;
     for(mr=0;mr<mc_sz;mr+=MR){
         mr_sz = MIN(mc_sz-mr, MR);
         for(k=0;k<kc_sz;k++){
@@ -99,13 +100,14 @@ static void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_
     }
 }
 
-// scale beta*C outside macro kernel
 void sgemm_macro_kernel( 
         int    mc,
         int    nc,
         int    kc,
+        float  alpha,
         const float * packA,
         const float * packB,
+        float  beta,
         float * C,
         int    ldc )
 {
@@ -115,8 +117,10 @@ void sgemm_macro_kernel(
         for(nr=0;nr<nc;nr+=NR){
             nr_sz = MIN(nc-nr, NR);
             sgemm_micro_kernel(mr_sz, nr_sz, kc,
+                alpha,
                 packA + mr*kc,
                 packB + nr*kc,
+                beta,
                 C+mr*ldc+nr, ldc);
         }
     }
@@ -169,119 +173,20 @@ static void sgemm_nn(int M, int N, int K,
 
             for(mc = 0;mc<M;mc += BLOCK_M){
                 mc_size = MIN(M-mc, BLOCK_M);
-                pack_A(mc_size, kc_size, A + mc*lda + kc, lda, A_pack);
+                pack_A(mc_size, kc_size, A + mc*lda + kc, lda, A_pack, alpha);
 
                 if( kc==0 )
                     scale_C(mc_size, nc_size, beta, C+mc*ldc+nc, ldc);
 
                 sgemm_macro_kernel(mc_size, nc_size, kc_size,
-                    A_pack, B_pack,
-                    C+mc*ldc+nc, ldc);
+                    alpha, A_pack, B_pack,
+                    beta, C+mc*ldc+nc, ldc);
             }
         }
     }
     __aligned_free(A_pack);
     __aligned_free(B_pack);
 }
-#if 0
-{
-    int m, n, k;
-    for(m=0;m<M;m+=4){
-        for(n=0;n<N;n+=4){
-            // TODO: ensure m is divided by 4 !!!
-            register float
-            c_val_0_0, c_val_0_1, c_val_0_2, c_val_0_3,
-            c_val_1_0, c_val_1_1, c_val_1_2, c_val_1_3,
-            c_val_2_0, c_val_2_1, c_val_2_2, c_val_2_3,
-            c_val_3_0, c_val_3_1, c_val_3_2, c_val_3_3;
-
-            register float
-            a_val_0, a_val_1, a_val_2, a_val_3,
-            b_val_0, b_val_1, b_val_2, b_val_3;
-
-            c_val_0_0=0; c_val_0_1=0; c_val_0_2=0; c_val_0_3=0;
-            c_val_1_0=0; c_val_1_1=0; c_val_1_2=0; c_val_1_3=0;
-            c_val_2_0=0; c_val_2_1=0; c_val_2_2=0; c_val_2_3=0;
-            c_val_3_0=0; c_val_3_1=0; c_val_3_2=0; c_val_3_3=0;
-
-            float * ptr_a_0 = (float*)&A[(m+0)*lda];
-            float * ptr_a_1 = (float*)&A[(m+1)*lda];
-            float * ptr_a_2 = (float*)&A[(m+2)*lda];
-            float * ptr_a_3 = (float*)&A[(m+3)*lda];
-
-            float * ptr_b_0 = (float*)&B[n];
-            float * ptr_b_1 = (float*)&B[n+1];
-            float * ptr_b_2 = (float*)&B[n+2];
-            float * ptr_b_3 = (float*)&B[n+3];
-            for(k=0;k<K;k++) {
-                //register float b_val_0, b_val_1, b_val_2, b_val_3;
-                //b_val_0 = B[k*ldb+n];
-                //b_val_1 = B[k*ldb+n+1];
-                //b_val_2 = B[k*ldb+n+2];
-                //b_val_3 = B[k*ldb+n+3];
-                a_val_0 = *ptr_a_0;
-                a_val_1 = *ptr_a_1;
-                a_val_2 = *ptr_a_2;
-                a_val_3 = *ptr_a_3;
-
-                b_val_0 = *ptr_b_0;
-                b_val_1 = *ptr_b_1;
-                b_val_2 = *ptr_b_2;
-                b_val_3 = *ptr_b_3;
-
-                c_val_0_0 += a_val_0 * b_val_0;
-                c_val_1_0 += a_val_1 * b_val_0;
-                c_val_2_0 += a_val_2 * b_val_0;
-                c_val_3_0 += a_val_3 * b_val_0;
-
-                c_val_0_1 += a_val_0 * b_val_1;
-                c_val_1_1 += a_val_1 * b_val_1;
-                c_val_2_1 += a_val_2 * b_val_1;
-                c_val_3_1 += a_val_3 * b_val_1;
-
-                c_val_0_2 += a_val_0 * b_val_2;
-                c_val_1_2 += a_val_1 * b_val_2;
-                c_val_2_2 += a_val_2 * b_val_2;
-                c_val_3_2 += a_val_3 * b_val_2;
-
-                c_val_0_3 += a_val_0 * b_val_3;
-                c_val_1_3 += a_val_1 * b_val_3;
-                c_val_2_3 += a_val_2 * b_val_3;
-                c_val_3_3 += a_val_3 * b_val_3;
-
-                ptr_a_0++;
-                ptr_a_1++;
-                ptr_a_2++;
-                ptr_a_3++;
-
-                ptr_b_0 += ldb;
-                ptr_b_1 += ldb;
-                ptr_b_2 += ldb;
-                ptr_b_3 += ldb;
-            }
-            C[(m+0)*ldc+n+0] = c_val_0_0*alpha + C[(m+0)*ldc+n+0]*beta;
-            C[(m+1)*ldc+n+0] = c_val_1_0*alpha + C[(m+1)*ldc+n+0]*beta;
-            C[(m+2)*ldc+n+0] = c_val_2_0*alpha + C[(m+2)*ldc+n+0]*beta;
-            C[(m+3)*ldc+n+0] = c_val_3_0*alpha + C[(m+3)*ldc+n+0]*beta;
-
-            C[(m+0)*ldc+n+1] = c_val_0_1*alpha + C[(m+0)*ldc+n+1]*beta;
-            C[(m+1)*ldc+n+1] = c_val_1_1*alpha + C[(m+1)*ldc+n+1]*beta;
-            C[(m+2)*ldc+n+1] = c_val_2_1*alpha + C[(m+2)*ldc+n+1]*beta;
-            C[(m+3)*ldc+n+1] = c_val_3_1*alpha + C[(m+3)*ldc+n+1]*beta;
-
-            C[(m+0)*ldc+n+2] = c_val_0_2*alpha + C[(m+0)*ldc+n+2]*beta;
-            C[(m+1)*ldc+n+2] = c_val_1_2*alpha + C[(m+1)*ldc+n+2]*beta;
-            C[(m+2)*ldc+n+2] = c_val_2_2*alpha + C[(m+2)*ldc+n+2]*beta;
-            C[(m+3)*ldc+n+2] = c_val_3_2*alpha + C[(m+3)*ldc+n+2]*beta;
-
-            C[(m+0)*ldc+n+3] = c_val_0_3*alpha + C[(m+0)*ldc+n+3]*beta;
-            C[(m+1)*ldc+n+3] = c_val_1_3*alpha + C[(m+1)*ldc+n+3]*beta;
-            C[(m+2)*ldc+n+3] = c_val_2_3*alpha + C[(m+2)*ldc+n+3]*beta;
-            C[(m+3)*ldc+n+3] = c_val_3_3*alpha + C[(m+3)*ldc+n+3]*beta;
-        }
-    }
-}
-#endif
 
 void cblas_sgemm_opt(layout_t Layout, trans_t Trans_a, trans_t Trans_b,
                 int M, int N, int K,
