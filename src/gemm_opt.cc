@@ -9,7 +9,7 @@
 #define BLOCK_K 64       // last micro kernel iteratoin
 
 #define MR 8
-#define NR 6
+#define NR 4
 
 #ifndef MIN
 #define MIN(a,b) ( ((a)<(b)) ? (a):(b) )
@@ -31,29 +31,28 @@
 *  |   |   |   |   |   |
 *  +---+---+---+---+---+
 *    |
-*    v       +-------+
-*  pack_B -> |       | nc
-*            +-------+
-*                kc
+*    v
+*  pack_B
 *
-* Note, pack_B need convert to col major to let microkernel do well
+*   nr
+*  +---+
+*  |   | kc
+*  +---+
+*  |   |
+*  +---+
+*
 */
-static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_buf){
-    // assume origin B is row major
-    int nr,kr,nr_sz;
-    //float * ptr[NR];
-    const float * ptr = B;
-    int i;
+// pre scale alpha here
+static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_buf, float alpha){
+    int k, nr, nr_sz, i;
+    const float * ptr_b = B;
+    float * ptr_b_pack = pack_buf;
     for(nr=0;nr<nc_sz;nr+=NR){
         nr_sz = MIN(nc_sz-nr, NR);
-        //for(i=0;i<nr_sz;i++)
-        //    ptr[i] = B + i;
-        // TODO: fast copy
-        for(i=0;i<nr_sz;i++){
-            ptr = B+nr+i;
-            for(kr=0;kr<kc_sz;kr++){
-                *pack_buf++ = *ptr;
-                ptr += ldb;
+        for(k=0;k<kc_sz;k++){
+            ptr_b = B + k*ldb + nr;
+            for(i=0;i<nr_sz;i++){
+                *ptr_b_pack++ = *ptr_b++ * alpha;
             }
         }
     }
@@ -73,36 +72,38 @@ static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_
 *    +-------+      |
 *    |       |      v
 *    +-------+      -
+* 
+*   pack_A
 *
+*    mr
+*  +---+
+*  |   | kc
+*  +---+
+*  |   | kc
+*
+* pack_A convert to col major for each tile
 */
 static void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_buf){
-    const float * ptr[MR];
-    float * pack_ptr[MR];
-    int mr, mr_sz, kr;
-    int i;
+    int mr,mr_sz, k, i;
+    const float * ptr_a = A;
+    float * ptr_a_pack = pack_buf;
     for(mr=0;mr<mc_sz;mr+=MR){
-        mr_sz = MIN(mc_sz-mr,  MR);
-        for(i=0;i<mr_sz;i++){
-            ptr[i] = A + mr*lda + i*lda;
-            pack_ptr[i] = pack_buf + mr*kc_sz + i*kc_sz;
-        }
-        // TODO: fast copy, maybe copy whole block at once
-        for(kr=0;kr<kc_sz;kr++){
+        mr_sz = MIN(mc_sz-mr, MR);
+        for(k=0;k<kc_sz;k++){
+            ptr_a = A + mr*lda + k;
             for(i=0;i<mr_sz;i++){
-                *pack_ptr[i] = *ptr[i];
-                ptr[i] = ptr[i]+1;
-                pack_ptr[i] = pack_ptr[i] +1;
+                *ptr_a_pack++ = *ptr_a;
+                ptr_a += lda;
             }
         }
     }
 }
 
 // scale beta*C outside macro kernel
-void sgemm_macro_kernel(
+void sgemm_macro_kernel( 
         int    mc,
         int    nc,
         int    kc,
-        float  alpha,
         const float * packA,
         const float * packB,
         float * C,
@@ -114,10 +115,9 @@ void sgemm_macro_kernel(
         for(nr=0;nr<nc;nr+=NR){
             nr_sz = MIN(nc-nr, NR);
             sgemm_micro_kernel(mr_sz, nr_sz, kc,
-            alpha,
-            packA + mr*kc,
-            packB + nr*kc,
-            C+mr*ldc+nr, ldc);
+                packA + mr*kc,
+                packB + nr*kc,
+                C+mr*ldc+nr, ldc);
         }
     }
 }
@@ -153,7 +153,7 @@ static void sgemm_nn(int M, int N, int K,
                 float alpha,
                 const float *A, int lda,
                 const float *B, int ldb,
-                float beta, 
+                float beta,
                 float *C, int ldc)
 {
     int nc, nc_size, kc, kc_size, mc, mc_size;
@@ -165,7 +165,7 @@ static void sgemm_nn(int M, int N, int K,
         nc_size = MIN(N-nc, BLOCK_N);
         for(kc = 0;kc<K; kc+= BLOCK_K){
             kc_size = MIN(K-kc, BLOCK_K);
-            pack_B(nc_size, kc_size, B + kc*ldb + nc, ldb, B_pack);
+            pack_B(nc_size, kc_size, B + kc*ldb + nc, ldb, B_pack, alpha);
 
             for(mc = 0;mc<M;mc += BLOCK_M){
                 mc_size = MIN(M-mc, BLOCK_M);
@@ -175,7 +175,7 @@ static void sgemm_nn(int M, int N, int K,
                     scale_C(mc_size, nc_size, beta, C+mc*ldc+nc, ldc);
 
                 sgemm_macro_kernel(mc_size, nc_size, kc_size,
-                    alpha, A_pack, B_pack,
+                    A_pack, B_pack,
                     C+mc*ldc+nc, ldc);
             }
         }
