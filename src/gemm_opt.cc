@@ -8,8 +8,8 @@
 #define BLOCK_N 512
 #define BLOCK_K 64       // last micro kernel iteratoin
 
-#define MR 8
-#define NR 4
+#define MR 4
+#define NR 8
 
 #ifndef MIN
 #define MIN(a,b) ( ((a)<(b)) ? (a):(b) )

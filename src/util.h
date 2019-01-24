@@ -44,7 +44,7 @@ static inline unsigned long long sgemm_flop(unsigned long long M, unsigned long 
 #endif
     (void)alpha;
     (void)beta;
-    return M*N*K*2;
+    return M*N*(K+1)*2;
 }
 
 

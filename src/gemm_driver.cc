@@ -14,6 +14,13 @@ extern void cblas_sgemm_opt(layout_t Layout, trans_t Trans_a, trans_t Trans_b,
                 float beta,
                 float *C, int ldc);
 
+#define INTEL_AVX2
+static double get_peak_gflops_fp32(double freq_mhz){
+#ifdef INTEL_AVX2
+    return 2/*2 port*/*8/*fp32 for 256 bit*/*2/*fma*/*freq_mhz/1e3;
+#endif
+}
+
 class arg_parser{
 #define ARG_VALUE_INIT "n/a"
 public:
@@ -116,13 +123,15 @@ struct bench_result{
     int             loops;
     double          gflops;
     double          time_ms;    // cost for 1 loop
+    double          perf;       // percentage
     matrix_fp32_t * c;
-    bench_result(int loops_, double gflops_, double time_ms_, matrix_fp32_t * c_):
-        loops(loops_),gflops(gflops_),time_ms(time_ms_),c(c_){}
+    bench_result(int loops_, double gflops_, double time_ms_, double perf_, matrix_fp32_t * c_):
+        loops(loops_),gflops(gflops_),time_ms(time_ms_),perf(perf_),c(c_){}
     bench_result(bench_result && rhs){
         loops = rhs.loops;
         gflops = rhs.gflops;
         time_ms = rhs.time_ms;
+        perf = rhs.perf;
         c = rhs.c;
         rhs.c = nullptr;
     }
@@ -132,12 +141,15 @@ struct bench_result{
     }
 };
 
-#define LOOPS 5
-#define LOOP_WARMUP 1
+#define LOOPS 8
+#define LOOP_WARMUP 2
 
 class gemm_problem_t{
 public:
-    gemm_problem_t(int m_, int n_, int k_, float alpha_, float beta_, layout_t layout_, trans_t trans_a_, trans_t trans_b_, size_t align_){
+    gemm_problem_t(int m_, int n_, int k_, float alpha_, float beta_,
+        layout_t layout_, trans_t trans_a_, trans_t trans_b_, size_t align_,
+        double freq_)
+    {
         m = m_;
         n = n_;
         k = k_;
@@ -147,6 +159,7 @@ public:
         trans_a = trans_a_;
         trans_b = trans_b_;
         align = align_;
+        freq = freq_;
 
         gemm_desc = new gemm_desc_t(m,n,k,layout,trans_a,trans_b);
         int row, col, inc_row, inc_col;
@@ -182,7 +195,7 @@ public:
                 B->data,B->h_stride,
                 beta,
                 c_out->data, c_out->h_stride);
-            return std::move(bench_result(0,0,0,c_out));
+            return std::move(bench_result(0,0,0,0,c_out));
         }
 
         int i;
@@ -207,9 +220,10 @@ public:
         }
         double cost_per_loop = (current_sec()-start_time) / LOOPS;
         unsigned long long flop = sgemm_flop(m,n,k,alpha,beta);
-        double gflops = flop/(cost_per_loop *1e9);
+        double gflops = (double)flop/(cost_per_loop *1e9);
+        double gflops_theory = get_peak_gflops_fp32(freq);
         delete c_out;
-        return std::move(bench_result(LOOPS, gflops, cost_per_loop*1e3, nullptr));
+        return std::move(bench_result(LOOPS, gflops, cost_per_loop*1e3, gflops/gflops_theory*100, nullptr));
     }
 
 private:
@@ -227,6 +241,7 @@ private:
     trans_t trans_a;
     trans_t trans_b;
     size_t align;
+    double freq;    // in MHz
 };
 
 // specilization for openblas cblas_sgemm function
@@ -346,22 +361,22 @@ public:
         return true;
     }
 
-    void run( bool validate_only = false){
+    void run(double freq, bool validate_only = false){
         config cfg;
-        printf("    M    N    K alpha beta   gflops(ms)   gflops_ref(ms)\n");
+        printf("    M    N    K alpha beta   gflops(%%)   gflops_ref(%%)\n");
         while(1){
             bool have_next = validate_only?
                 next_config_valid(&cfg):
                 next_config(&cfg);
             if(!have_next)
                 break;
-            gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,16);
+            gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,32,freq);
             bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, validate_only);
             bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, validate_only);
             
-            printf(" %4d %4d %4d  %.1f  %.1f %6.2f(%5.2f) %6.2f(%5.2f)",
+            printf(" %4d %4d %4d  %.1f  %.1f %6.2f(%2.4f) %6.2f(%2.4f)",
                 cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,
-                rtn_opt.gflops,rtn_opt.time_ms,rtn_ref.gflops,rtn_ref.time_ms);
+                rtn_opt.gflops,rtn_opt.perf,rtn_ref.gflops,rtn_ref.perf);
             if(validate_only){
                 bool result = valid_matrix(rtn_ref.c, rtn_opt.c, 0.001f);
                 if(result)
@@ -375,7 +390,7 @@ public:
 
 };
 
-#define MEM_ALIGN_BYTE "16"
+#define MEM_ALIGN_BYTE "32"
 int main(int argc, char ** argv){
     arg_parser args("gemm");
     args.insert_arg("m", "M value of gemm, int", "512");
@@ -383,6 +398,7 @@ int main(int argc, char ** argv){
     args.insert_arg("k", "K value of gemm, int", "512");
     args.insert_arg("a", "ALPHA value of gemm, float", "1.0");
     args.insert_arg("b", "BETA value of gemm, float", "0");
+    args.insert_arg("f", "CPU frequency, in MHz", "2600");
 
     args.insert_arg("layout", "layout, row|col", "row");
     args.insert_arg("ta", "translation for A, no|trans", "no");
@@ -399,6 +415,7 @@ int main(int argc, char ** argv){
     int k = args.get_arg<int>("k");
     float alpha = args.get_arg<float>("a");
     float beta  = args.get_arg<float>("b");
+    double freq = args.get_arg<double>("f");
 
     layout_t layout = args.get_arg_choice<layout_t>("layout", {
                         {"row", LAYOUT_ROW_MAJOR},
@@ -416,12 +433,12 @@ int main(int argc, char ** argv){
 
     if(is_bench){
         gemm_bench gb;
-        gb.run(valid);
+        gb.run(freq, valid);
         return 0;
     }
     args.dump_parsed();
 
-    gemm_problem_t gemm_prob(m,n,k,alpha,beta,layout,trans_a,trans_b,align);
+    gemm_problem_t gemm_prob(m,n,k,alpha,beta,layout,trans_a,trans_b,align,freq);
     bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, valid);
     bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, valid);
 
