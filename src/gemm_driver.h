@@ -25,6 +25,11 @@ typedef enum {
     TRANS_CONJ_NO_TRANS,
 }trans_t;
 
+typedef enum {
+    IDENT_A_MATRIX = 0,
+    IDENT_B_MATRIX
+}identifier_t;
+
 // cblas helper function
 static inline CBLAS_ORDER to_blas_layout(layout_t layout){
     if(layout == LAYOUT_ROW_MAJOR)

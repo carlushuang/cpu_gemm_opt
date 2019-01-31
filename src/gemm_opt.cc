@@ -1,15 +1,10 @@
 #include "gemm_driver.h"
 #include "kernel/sgemm_micro_kernel.h"
+#include "kernel/sgemm_pack.h"
+#include "gemm_config.h"
 
 //#define BLOCK_K 128
 //#define BLOCK_M 256
-
-#define BLOCK_M 72
-#define BLOCK_N 512
-#define BLOCK_K 64       // last micro kernel iteratoin
-
-#define MR 4
-#define NR 8
 
 #ifndef MIN
 #define MIN(a,b) ( ((a)<(b)) ? (a):(b) )
@@ -21,84 +16,6 @@
 
 #define ALIGN_SIZE 32
 
-/*
-*  assume B is row major
-*  input B block:
-*  <-------- nc ------->
-*  < nr>
-*  +---+---+---+---+---+
-*  |   |   |   |   |   |kc
-*  |   |   |   |   |   |
-*  +---+---+---+---+---+
-*    |
-*    v
-*  pack_B
-*
-*   nr
-*  +---+
-*  |   | kc
-*  +---+
-*  |   |
-*  +---+
-*
-*/
-// pre scale alpha here
-static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_buf, float alpha){
-    int k, nr, nr_sz, i;
-    const float * ptr_b = B;
-    float * ptr_b_pack = pack_buf;
-    for(nr=0;nr<nc_sz;nr+=NR){
-        nr_sz = MIN(nc_sz-nr, NR);
-        for(k=0;k<kc_sz;k++){
-            ptr_b = B + k*ldb + nr;
-            for(i=0;i<nr_sz;i++){
-                *ptr_b_pack++ = *ptr_b++ * alpha;
-            }
-        }
-    }
-}
-
-/*
-*    assume A is row major
-*    <-  kc ->
-*    +-------+      - 
-*    |       | mr   ^
-*    +-------+      |
-*    |       |
-*    +-------+
-*    |       |      mc
-*    +-------+
-*    |       |
-*    +-------+      |
-*    |       |      v
-*    +-------+      -
-* 
-*   pack_A
-*
-*    mr
-*  +---+
-*  |   | kc
-*  +---+
-*  |   | kc
-*
-* pack_A convert to col major for each tile
-*/
-static void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_buf, float alpha){
-    int mr,mr_sz, k, i;
-    const float * ptr_a = A;
-    float * ptr_a_pack = pack_buf;
-    (void)alpha;
-    for(mr=0;mr<mc_sz;mr+=MR){
-        mr_sz = MIN(mc_sz-mr, MR);
-        for(k=0;k<kc_sz;k++){
-            ptr_a = A + mr*lda + k;
-            for(i=0;i<mr_sz;i++){
-                *ptr_a_pack++ = *ptr_a;
-                ptr_a += lda;
-            }
-        }
-    }
-}
 
 void sgemm_macro_kernel( 
         int    mc,
@@ -169,11 +86,17 @@ static void sgemm_nn(int M, int N, int K,
         nc_size = MIN(N-nc, BLOCK_N);
         for(kc = 0;kc<K; kc+= BLOCK_K){
             kc_size = MIN(K-kc, BLOCK_K);
-            pack_B(nc_size, kc_size, B + kc*ldb + nc, ldb, B_pack, alpha);
+            //pack_B(nc_size, kc_size, B + kc*ldb + nc, ldb, B_pack, alpha);
+            sgemm_pack(LAYOUT_ROW_MAJOR, TRANS_NO_TRANS, IDENT_B_MATRIX,
+                0, nc_size, kc_size,
+                alpha, B + kc*ldb + nc, ldb, B_pack);
 
             for(mc = 0;mc<M;mc += BLOCK_M){
                 mc_size = MIN(M-mc, BLOCK_M);
-                pack_A(mc_size, kc_size, A + mc*lda + kc, lda, A_pack, alpha);
+                //pack_A(mc_size, kc_size, A + mc*lda + kc, lda, A_pack, alpha);
+                sgemm_pack(LAYOUT_ROW_MAJOR, TRANS_NO_TRANS, IDENT_A_MATRIX,
+                    mc_size, 0, kc_size,
+                    alpha, A + mc*lda + kc, lda, A_pack);
 
                 if( kc==0 )
                     scale_C(mc_size, nc_size, beta, C+mc*ldc+nc, ldc);

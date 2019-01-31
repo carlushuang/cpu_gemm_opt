@@ -17,7 +17,7 @@ extern void cblas_sgemm_opt(layout_t Layout, trans_t Trans_a, trans_t Trans_b,
 #define INTEL_AVX2
 static double get_peak_gflops_fp32(double freq_mhz){
 #ifdef INTEL_AVX2
-    return 2/*2 port*/*8/*fp32 for 256 bit*/*2/*fma*/*freq_mhz/1e3;
+    return 2/*2 port*/*8/*fp32 for 256 bit*/*2/*fma*/*freq_mhz/1024.0;
 #endif
 }
 
