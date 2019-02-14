@@ -2,7 +2,7 @@
 #define __GEMM_KERNEL_H
 
 
-void sgemm_micro_kernel(int m, int n, int k,
+extern "C" void sgemm_micro_kernel(int m, int n, int k,
     float alpha,
     const float  *   A,
     const float *   B,
