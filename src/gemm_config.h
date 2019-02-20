@@ -7,7 +7,7 @@
 #define BLOCK_K 64       // last micro kernel iteratoin
 
 #define MR 4
-#define NR 8
+#define NR 16
 
 
 

@@ -134,7 +134,7 @@ void sgemm_asm_4x8(int m, int n, int k,
     _mm256_store_ps(c_ptr, c2); c_ptr += ldc;
     _mm256_store_ps(c_ptr, c3);
 #endif
-#if 1
+#if 0
     int k_itr = k/2;
     int k_rem = k%2;
     int k_i;
@@ -221,5 +221,107 @@ void sgemm_asm_4x8(int m, int n, int k,
     _mm256_store_ps(c_ptr, c1); c_ptr += ldc;
     _mm256_store_ps(c_ptr, c2); c_ptr += ldc;
     _mm256_store_ps(c_ptr, c3);
+#endif
+#if 1
+    // need use 64bit long
+    unsigned long long k_itr = k/2;
+    unsigned long long k_rem = k%2;
+    unsigned long long ldc_ = ldc;
+
+    asm volatile(
+    "movq           %2,     %%rax                   \n" // A
+    "movq           %3,     %%rbx                   \n" // B
+    "                                               \n"
+    "vxorps         %%ymm0, %%ymm0, %%ymm0          \n"
+    "vxorps         %%ymm1, %%ymm1, %%ymm1          \n"
+    "vxorps         %%ymm2, %%ymm2, %%ymm2          \n"
+    "vxorps         %%ymm3, %%ymm3, %%ymm3          \n"
+    "                                               \n"
+    "movq           %0,     %%rsi                   \n" // loop k_itr
+    "testq          %%rsi,  %%rsi                   \n"
+    "je             .LOOP_ITER_DONE                 \n"
+    "                                               \n"
+    "vmovaps        (%%rbx),        %%ymm4          \n" // B panel preload
+    ".LOOP_ITER:                                    \n"
+    "prefetcht0     8*32(%%rax)                     \n"
+    "prefetcht0     16*32(%%rbx)                    \n"
+    //"vmovaps        (%%rbx),        %%ymm4          \n" // B panel
+    "vmovaps        32(%%rbx),      %%ymm5          \n" // B panel + 1
+    "                                               \n"
+    "vbroadcastss   (%%rax),        %%ymm6          \n"
+    "vbroadcastss   4(%%rax),       %%ymm7          \n"
+    "vfmadd231ps    %%ymm6, %%ymm4, %%ymm0          \n" // AT&T syntax: vfmadd231ps ymm3, ymm2, ymm1
+    "vfmadd231ps    %%ymm7, %%ymm4, %%ymm1          \n" // y1=y2*y3+y1
+    "                                               \n" // AT&T syntax: vfmadd213ps ymm3, ymm2, ymm1
+    "vbroadcastss   8(%%rax),       %%ymm8          \n" // y1=y2*y1+y3
+    "vbroadcastss   12(%%rax),      %%ymm9          \n"
+    "vfmadd231ps    %%ymm8, %%ymm4, %%ymm2          \n"
+    "vfmadd231ps    %%ymm9, %%ymm4, %%ymm3          \n"
+    "vmovaps        (%%rbx),        %%ymm4          \n" // B panel
+    "                                               \n"
+    "vbroadcastss   16(%%rax),      %%ymm6          \n"
+    "vbroadcastss   20(%%rax),      %%ymm7          \n"
+    "vfmadd231ps    %%ymm6, %%ymm5, %%ymm0          \n"
+    "vfmadd231ps    %%ymm7, %%ymm5, %%ymm1          \n"
+    "                                               \n"
+    "vbroadcastss   24(%%rax),      %%ymm8          \n"
+    "vbroadcastss   28(%%rax),      %%ymm9          \n"
+    "vfmadd231ps    %%ymm8, %%ymm5, %%ymm2          \n"
+    "vfmadd231ps    %%ymm9, %%ymm5, %%ymm3          \n"
+    "                                               \n"
+    "addq           $32,    %%rax                   \n"
+    "addq           $64,    %%rbx                   \n"
+    "                                               \n"
+    "subq           $1,     %%rsi                   \n"
+    "jne            .LOOP_ITER                      \n"
+    "                                               \n"
+    ".LOOP_ITER_DONE:                               \n"
+    "movq           %1,     %%rsi                   \n" // loop k_rem
+    "testq          %%rsi,  %%rsi                   \n"
+    "je             .POST                           \n"
+    "                                               \n"
+    ".LOOP_REM:                                     \n"
+    "vmovaps        (%%rbx),        %%ymm4          \n" // B panel
+    "vbroadcastss   (%%rax),        %%ymm6          \n"
+    "vfmadd231ps    %%ymm4, %%ymm6, %%ymm0          \n"
+    "vbroadcastss   4(%%rax),       %%ymm6          \n"
+    "vfmadd231ps    %%ymm4, %%ymm6, %%ymm1          \n"
+    "vbroadcastss   8(%%rax),       %%ymm6          \n"
+    "vfmadd231ps    %%ymm4, %%ymm6, %%ymm2          \n"
+    "vbroadcastss   12(%%rax),      %%ymm6          \n"
+    "vfmadd231ps    %%ymm4, %%ymm6, %%ymm3          \n"
+    "addq           $16,    %%rax                   \n"
+    "addq           $32,    %%rbx                   \n"
+    "                                               \n"
+    "subq           $1,     %%rsi                   \n"
+    "jne            .LOOP_REM                       \n"
+    "                                               \n"
+    ".POST:                                         \n"
+    "movq           %4,     %%rax                   \n" // C
+    "movq           %5,     %%rdi                   \n"
+    "leaq           (%%rax, %%rdi, 4), %%rbx        \n"
+    "leaq           (%%rbx, %%rdi, 4), %%rcx        \n"
+    "leaq           (%%rcx, %%rdi, 4), %%rdx        \n"
+    "vaddps         (%%rax), %%ymm0, %%ymm0         \n" // AT&T syntax: vaddps ymm3, ymm2, ymm1, ymm3+ymm2 -> ymm1
+    "vaddps         (%%rbx), %%ymm1, %%ymm1         \n"
+    "vaddps         (%%rcx), %%ymm2, %%ymm2         \n"
+    "vaddps         (%%rdx), %%ymm3, %%ymm3         \n"
+    "vmovaps        %%ymm0, (%%rax)                 \n"
+    "vmovaps        %%ymm1, (%%rbx)                 \n"
+    "vmovaps        %%ymm2, (%%rcx)                 \n"
+    "vmovaps        %%ymm3, (%%rdx)                 \n"
+    : // output
+    : // input
+        "r" (k_itr),  // 0
+        "r" (k_rem),  // 1
+        "m" (A),      // 2
+        "m" (B),      // 3
+        "m" (C),      // 4
+        "r" (ldc_)    // 5
+    : // clobber
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi",
+        "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5",
+        "ymm6", "ymm7", "ymm8", "ymm9"
+    );
 #endif
 }

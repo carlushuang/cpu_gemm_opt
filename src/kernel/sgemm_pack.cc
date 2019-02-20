@@ -87,12 +87,11 @@ static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_
         }
     }
 }
-static void sgemm_pack_nn_b(int m, int n, int k,
+static void sgemm_pack_nn_b_nr8(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
-    //pack_B(n,k,src,ld,dest,alpha);
-    assert(MR==4 && NR==8 && "4x8 kernel pack B");
+    assert(NR==8 && "mx8 kernel pack B");
     (void)m;
 
     int n_itr = n/8;    // NR
@@ -188,6 +187,115 @@ static void sgemm_pack_nn_b(int m, int n, int k,
             *dest_ptr = k0; dest_ptr+=n_rem;
         }
     }
+}
+static void sgemm_pack_nn_b_nr16(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest)
+{
+    assert(NR==16 && "mx16 kernel pack B");
+    (void)m;
+
+    int n_itr = n/16;    // NR
+    int n_rem = n%16;
+
+    int k_itr = k/4;    // copy every 4 row
+    int k_rem = k%4;
+
+    int i,j;
+
+    __m256 ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7;
+    __m256 ymm_alpha;
+    ymm_alpha = _mm256_broadcast_ss(&alpha);
+
+    const float * src_ptr;
+    float * dest_ptr = dest;
+    for(i=0;i<n_itr;i++){
+        src_ptr = src + i*16;
+        for(j=0;j<k_itr;j++){
+            // load
+            ymm0 = _mm256_loadu_ps(src_ptr);
+            ymm1 = _mm256_loadu_ps(src_ptr+8);
+            src_ptr += ld;
+            ymm2 = _mm256_loadu_ps(src_ptr);
+            ymm3 = _mm256_loadu_ps(src_ptr+8);
+            src_ptr += ld;
+            ymm4 = _mm256_loadu_ps(src_ptr);
+            ymm5 = _mm256_loadu_ps(src_ptr+8);
+            src_ptr += ld;
+            ymm6 = _mm256_loadu_ps(src_ptr);
+            ymm7 = _mm256_loadu_ps(src_ptr+8);
+            src_ptr += ld;
+            // scale
+            ymm0 = _mm256_mul_ps(ymm0, ymm_alpha);
+            ymm1 = _mm256_mul_ps(ymm1, ymm_alpha);
+            ymm2 = _mm256_mul_ps(ymm2, ymm_alpha);
+            ymm3 = _mm256_mul_ps(ymm3, ymm_alpha);
+            ymm4 = _mm256_mul_ps(ymm4, ymm_alpha);
+            ymm5 = _mm256_mul_ps(ymm5, ymm_alpha);
+            ymm6 = _mm256_mul_ps(ymm6, ymm_alpha);
+            ymm7 = _mm256_mul_ps(ymm7, ymm_alpha);
+            // store
+            _mm256_storeu_ps(dest_ptr, ymm0); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm1); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm2); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm3); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm4); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm5); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm6); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm7); dest_ptr += 8;
+        }
+        for(j=0;j<k_rem;j++){
+            ymm0 = _mm256_loadu_ps(src_ptr);
+            ymm1 = _mm256_loadu_ps(src_ptr+8); src_ptr += ld;
+            ymm0 = _mm256_mul_ps(ymm0, ymm_alpha);
+            ymm1 = _mm256_mul_ps(ymm1, ymm_alpha);
+            _mm256_storeu_ps(dest_ptr, ymm0); dest_ptr += 8;
+            _mm256_storeu_ps(dest_ptr, ymm1); dest_ptr += 8;
+        }
+    }
+    // final case, copy column one by one
+    float k0, k1, k2, k3;
+    src = src + n_itr*16;
+    dest = dest + k_itr*4;
+    for(i=0;i<n_rem;i++){
+        src_ptr = src + i;
+        dest_ptr = dest + i;
+        for(j=0;j<k_itr;j++){
+            // load 
+            k0 = *src_ptr; src_ptr += ld;
+            k1 = *src_ptr; src_ptr += ld;
+            k2 = *src_ptr; src_ptr += ld;
+            k3 = *src_ptr; src_ptr += ld;
+
+            // scale
+            k0 *= alpha;
+            k1 *= alpha;
+            k2 *= alpha;
+            k3 *= alpha;
+
+            // store
+            *dest_ptr = k0; dest_ptr+=n_rem;
+            *dest_ptr = k1; dest_ptr+=n_rem;
+            *dest_ptr = k2; dest_ptr+=n_rem;
+            *dest_ptr = k3; dest_ptr+=n_rem;
+        }
+        for(j=0;j<k_rem;j++){
+            k0 = *src_ptr; src_ptr += ld;
+            k0 *= alpha;
+            *dest_ptr = k0; dest_ptr+=n_rem;
+        }
+    }
+}
+static void sgemm_pack_nn_b(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest)
+{
+
+    if(NR==8)
+        return sgemm_pack_nn_b_nr8(m,n,k,alpha,src,ld,dest);
+    if(NR==16)
+        return sgemm_pack_nn_b_nr16(m,n,k,alpha,src,ld,dest);
+    return pack_B(n,k,src,ld,dest,alpha);
 }
 
 //https://software.intel.com/en-us/mkl-developer-reference-c-cblas-gemm-pack

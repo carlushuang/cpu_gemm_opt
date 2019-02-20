@@ -141,8 +141,8 @@ struct bench_result{
     }
 };
 
-#define LOOPS 8
-#define LOOP_WARMUP 2
+#define LOOPS 6
+#define LOOP_WARMUP 1
 
 class gemm_problem_t{
 public:
@@ -279,7 +279,7 @@ public:
     bool next_config(config * cfg){
         static int ITER_START = 32;
         static int ITER_STEP = 32;
-        static int ITER_END = 1024;
+        static int ITER_END = 4096;
         static float ALPHA = 1.0f;
         static float BETA  = 1.0f;
 
@@ -303,8 +303,12 @@ public:
                 step = ITER_STEP;
             else if(current_iter < 512)
                 step = ITER_STEP * 2;
-            else
+            else if(current_iter < 1024)
                 step = ITER_STEP * 4;
+            else if(current_iter < 2048)
+                step = ITER_STEP * 4;
+            else
+                step = ITER_STEP * 8;
 
             current_iter += step;
             if(current_iter > ITER_END)
