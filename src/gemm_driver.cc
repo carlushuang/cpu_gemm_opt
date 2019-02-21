@@ -1,5 +1,5 @@
 #include "gemm_driver.h"
-
+#include "gemm_config.h"
 #include <stdio.h>
 #include <assert.h>
 #include <iostream>
@@ -365,8 +365,20 @@ public:
         return true;
     }
 
+    // note: this is preferd size in use of goto algo. small than this may still run
+    inline int req_l1(){
+        return BLOCK_K*NR*sizeof(float);
+    }
+    inline int req_l2(){
+        return BLOCK_K*BLOCK_M*sizeof(float);
+    }
+    inline int req_l3(){
+        return BLOCK_K*BLOCK_N*sizeof(float);
+    }
     void run(double freq, bool validate_only = false){
         config cfg;
+        printf("MC:%d, NC:%d, KC:%d, MR:%d, NR:%d\n", BLOCK_M, BLOCK_N, BLOCK_K, MR, NR);
+        printf("require: L1:%.1fKB(KC*NR*4), L2:%.1fKB(KC*MC*4), L3:%.1fKB(KC*NC*4)\n", req_l1()/1024.0, req_l2()/1024.0, req_l3()/1024.0);
         printf("    M    N    K alpha beta   gflops(%%)   gflops_ref(%%)\n");
         while(1){
             bool have_next = validate_only?

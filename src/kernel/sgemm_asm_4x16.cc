@@ -14,8 +14,8 @@ void sgemm_asm_4x16(int m, int n, int k,
     float * C, int ldc)
 {
     //assert(m==4 && n==16 && "4x16 kernel");
-    unsigned long long k_itr = k/2;
-    unsigned long long k_rem = k%2;
+    unsigned long long k_itr = k/4;
+    unsigned long long k_rem = k%4;
     unsigned long long ldc_  = ldc;
 
     asm volatile(
@@ -38,43 +38,90 @@ void sgemm_asm_4x16(int m, int n, int k,
         "testq          %%rsi,      %%rsi                   \n"
         "je             .LOOP_ITER_END                      \n"
 
+        //"prefetcht0     0*64(%%rbx)                         \n" // prefetch B
+        //"prefetcht0     1*64(%%rbx)                         \n" // prefetch B
+        //"prefetcht0     (%%rax)                             \n" // prefetch next A
+
         ".LOOP_ITER:                                        \n"
-        "vmovaps        (%%rbx),    %%ymm0                  \n" // B panel 0
-        "vmovaps        32(%%rbx),  %%ymm1                  \n" // B panel 1
+                                                                // iter 0
+        //"prefetcht0     2*64(%%rbx)                         \n" // prefetch B
+        //"prefetcht0     64(%%rax)                           \n" // prefetch A for next loop
+        "vmovaps        0*32(%%rbx),  %%ymm0                \n" // B panel 0
+        "vmovaps        1*32(%%rbx),  %%ymm1                \n" // B panel 1
 
-        "vbroadcastss   (%%rax),    %%ymm2                  \n" // A broadcast 0
-        "vbroadcastss   4(%%rax),   %%ymm3                  \n" // A broadcast 1
+        "vbroadcastss   0*4(%%rax), %%ymm2                  \n" // A broadcast 0
+        "vbroadcastss   1*4(%%rax), %%ymm3                  \n" // A broadcast 1
         "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm8       \n"
         "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm9       \n"
         "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm10      \n"
         "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm11      \n"
 
-        "vbroadcastss   8(%%rax),   %%ymm2                  \n" // A broadcast 0
-        "vbroadcastss   12(%%rax),  %%ymm3                  \n" // A broadcast 1
+        "vbroadcastss   2*4(%%rax), %%ymm2                  \n" // A broadcast 0
+        "vbroadcastss   3*4(%%rax), %%ymm3                  \n" // A broadcast 1
         "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm12      \n"
         "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm13      \n"
         "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm14      \n"
         "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm15      \n"
 
-        "vmovaps        64(%%rbx),  %%ymm0                  \n" // B panel 0
-        "vmovaps        96(%%rbx),  %%ymm1                  \n" // B panel 1
+                                                                // iter 1
+        //"prefetcht0     3*64(%%rbx)                         \n" // prefetch B
+        "vmovaps        2*32(%%rbx),  %%ymm0                \n" // B panel 0
+        "vmovaps        3*32(%%rbx),  %%ymm1                \n" // B panel 1
 
-        "vbroadcastss   16(%%rax),  %%ymm2                  \n" // A broadcast 0
-        "vbroadcastss   20(%%rax),  %%ymm3                  \n" // A broadcast 1
+        "vbroadcastss   4*4(%%rax), %%ymm2                  \n" // A broadcast 0
+        "vbroadcastss   5*4(%%rax), %%ymm3                  \n" // A broadcast 1
         "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm8       \n"
         "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm9       \n"
         "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm10      \n"
         "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm11      \n"
 
-        "vbroadcastss   24(%%rax),  %%ymm2                  \n" // A broadcast 0
-        "vbroadcastss   28(%%rax),  %%ymm3                  \n" // A broadcast 1
+        "vbroadcastss   6*4(%%rax), %%ymm2                  \n" // A broadcast 0
+        "vbroadcastss   7*4(%%rax), %%ymm3                  \n" // A broadcast 1
+        "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm12      \n"
+        "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm13      \n"
+        "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm14      \n"
+        "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm15      \n"
+                                                                // iter 2
+        //"prefetcht0     4*64(%%rbx)                         \n" // prefetch B
+        "vmovaps        4*32(%%rbx),  %%ymm0                \n" // B panel 0
+        "vmovaps        5*32(%%rbx),    %%ymm1              \n" // B panel 1
+
+        "vbroadcastss   8*4(%%rax),  %%ymm2                 \n" // A broadcast 0
+        "vbroadcastss   9*4(%%rax),  %%ymm3                 \n" // A broadcast 1
+        "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm8       \n"
+        "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm9       \n"
+        "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm10      \n"
+        "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm11      \n"
+
+        "vbroadcastss   10*4(%%rax),  %%ymm2                \n" // A broadcast 0
+        "vbroadcastss   11*4(%%rax),  %%ymm3                \n" // A broadcast 1
         "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm12      \n"
         "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm13      \n"
         "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm14      \n"
         "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm15      \n"
 
-        "addq           $32,        %%rax                   \n"
-        "addq           $128,       %%rbx                   \n"
+                                                                // iter 3
+        //"prefetcht0     5*64(%%rbx)                         \n" // prefetch B
+        "vmovaps        6*32(%%rbx),  %%ymm0                \n" // B panel 0
+        "vmovaps        7*32(%%rbx),  %%ymm1                \n" // B panel 1
+
+        "vbroadcastss   12*4(%%rax),  %%ymm2                \n" // A broadcast 0
+        "vbroadcastss   13*4(%%rax),  %%ymm3                \n" // A broadcast 1
+        "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm8       \n"
+        "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm9       \n"
+        "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm10      \n"
+        "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm11      \n"
+
+        "vbroadcastss   14*4(%%rax),  %%ymm2                \n" // A broadcast 0
+        "vbroadcastss   15*4(%%rax),  %%ymm3                \n" // A broadcast 1
+        "vfmadd231ps    %%ymm0,     %%ymm2,    %%ymm12      \n"
+        "vfmadd231ps    %%ymm1,     %%ymm2,    %%ymm13      \n"
+        "vfmadd231ps    %%ymm0,     %%ymm3,    %%ymm14      \n"
+        "vfmadd231ps    %%ymm1,     %%ymm3,    %%ymm15      \n"
+
+                                                                // iter end
+        "addq           $64,        %%rax                   \n"
+        "addq           $256,       %%rbx                   \n"
         "subq           $1,         %%rsi                   \n"
         "jne            .LOOP_ITER                          \n"
         ".LOOP_ITER_END:                                    \n"
