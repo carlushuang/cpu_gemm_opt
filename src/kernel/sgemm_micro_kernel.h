@@ -15,8 +15,8 @@ extern "C" void sgemm_micro_kernel(int m, int n, int k,
 //#define sgemm_kernel_c sgemm_micro_kernel
 //#define sgemm_asm_4x8 sgemm_micro_kernel
 //#define sgemm_asm_8x8 sgemm_micro_kernel
-
-#define sgemm_asm_4x16 sgemm_micro_kernel
+//#define sgemm_asm_4x16 sgemm_micro_kernel
+#define sgemm_asm_6x16 sgemm_micro_kernel
 #endif
 
 #endif

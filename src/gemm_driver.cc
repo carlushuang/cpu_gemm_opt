@@ -141,7 +141,7 @@ struct bench_result{
     }
 };
 
-#define LOOPS 6
+#define LOOPS 4
 #define LOOP_WARMUP 1
 
 class gemm_problem_t{
@@ -277,9 +277,9 @@ public:
     };
 
     bool next_config(config * cfg){
-        static int ITER_START = 32;
-        static int ITER_STEP = 32;
-        static int ITER_END = 4096;
+        static int ITER_START = 48;
+        static int ITER_STEP = 48;
+        static int ITER_END = 6144;
         static float ALPHA = 1.0f;
         static float BETA  = 1.0f;
 
@@ -319,9 +319,14 @@ public:
         return true;
     }
     bool next_config_valid(config * cfg){
+#if 0
         int Ms[] = {64,128,256,512,768,1024};
         int Ns[] = {64,128,256,512,768};
         int Ks[] = {64,128,256,512,768};
+#endif
+        int Ms[] = {48,96,192,384,768};
+        int Ns[] = {48,96,192,384,768};
+        int Ks[] = {48,96,192,384,768};
         float alphas[] = {1.0f, 2.1f};
         float betas[] = {1.0f, .0f, 1.6f};
 #define ARRAY_LEN(arr) (sizeof(arr)/sizeof(arr[0]))
@@ -378,12 +383,18 @@ public:
     void run(double freq, bool validate_only = false){
         config cfg;
         printf("MC:%d, NC:%d, KC:%d, MR:%d, NR:%d\n", BLOCK_M, BLOCK_N, BLOCK_K, MR, NR);
+        assert( ((BLOCK_M % MR) == 0) && ((BLOCK_N % NR) == 0) && "MC%MR, NC%NR must be zero\n");
         printf("require: L1:%.1fKB(KC*NR*4), L2:%.1fKB(KC*MC*4), L3:%.1fKB(KC*NC*4)\n", req_l1()/1024.0, req_l2()/1024.0, req_l3()/1024.0);
         printf("    M    N    K alpha beta   gflops(%%)   gflops_ref(%%)\n");
         while(1){
+#define VALID_BENCH_CONFIG
+#ifdef VALID_BENCH_CONFIG
+            bool have_next = next_config(&cfg);
+#else
             bool have_next = validate_only?
                 next_config_valid(&cfg):
-                next_config(&cfg);
+                next_config(&cfg); 
+#endif
             if(!have_next)
                 break;
             gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,32,freq);
