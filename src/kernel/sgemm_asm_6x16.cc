@@ -44,14 +44,14 @@ void sgemm_asm_6x16(int m, int n, int k,
         "testq          %%rsi,      %%rsi                   \n"
         "je             .LOOP_ITER_END                      \n"
 
-        //"prefetcht0     0*64(%%rbx)                         \n" // prefetch B
+        "prefetcht0     0*64(%%rbx)                         \n" // prefetch B
         //"prefetcht0     1*64(%%rbx)                         \n" // prefetch B
-        //"prefetcht0     (%%rax)                             \n" // prefetch next A
+        "prefetcht0     (%%rax)                             \n" // prefetch next A
 
         ".LOOP_ITER:                                        \n"
                                                                 // iter 0
-        //"prefetcht0     2*64(%%rbx)                         \n" // prefetch B
-        //"prefetcht0     64(%%rax)                           \n" // prefetch A for next loop
+        "prefetcht0     4*64(%%rbx)                         \n" // prefetch B
+        "prefetcht0     96(%%rax)                           \n" // prefetch A for next loop
         "vmovaps        0*32(%%rbx),  %%ymm0                \n" // B panel 0
         "vmovaps        1*32(%%rbx),  %%ymm1                \n" // B panel 1
 
