@@ -98,6 +98,21 @@ public:
         }
     }
 };
+
+class matrix_elem_t {
+public:
+    size_t operator() (size_t row, size_t col, size_t inc_row, size_t inc_col){
+        if(inc_col == 1){
+            return inc_row * row;
+        }
+        if(inc_row == 1){
+            return inc_col * col;
+        }
+        assert(0 && "not support this layout\n");
+        return 0;
+    }
+};
+
 class gemm_desc_t {
 public:
     // geometry layout desc, row, col, inc_row, inc_col
@@ -200,8 +215,10 @@ public:
         this->layout = layout_;
         this->trans = trans_;
         this->alignment = alignment_;
-        this->data = (float *) __aligned_malloc(sizeof(float)*elem(), alignment_);
-        rand_vector_f32(this->data, elem());
+        
+        size_t elements = matrix_elem_t()(row_, col_, inc_row_, inc_col_);
+        this->data = (float *) __aligned_malloc(sizeof(float)*elements, alignment_);
+        rand_vector_f32(this->data, elements);
 
         std::tie(h, w, h_stride) = matrix_cvt_t()(row,col,inc_row,inc_col,layout,trans);
     }
@@ -217,9 +234,10 @@ public:
         this->layout = rhs.layout;
         this->trans = rhs.trans;
         this->alignment = rhs.alignment;
-        this->data = (float *) __aligned_malloc(sizeof(float)*elem(), alignment);
+        size_t elements = matrix_elem_t()(rhs.row, rhs.col, rhs.inc_row, rhs.inc_col);
+        this->data = (float *) __aligned_malloc(sizeof(float)*elements, alignment);
         std::tie(h, w, h_stride) = matrix_cvt_t()(row,col,inc_row,inc_col,layout,trans);
-        memcpy(this->data, rhs.data, sizeof(float)*elem());
+        memcpy(this->data, rhs.data, sizeof(float)*elements);
     }
 
     matrix_fp32_t(const matrix_fp32_t & rhs){
@@ -228,11 +246,6 @@ public:
     matrix_fp32_t& operator =(const matrix_fp32_t & rhs){
         __copy(rhs);
         return *this;
-    }
-
-    size_t elem() const {
-          // assume no interleave pattern
-        return row*col*inc_row*inc_col;
     }
 
     float       *data;
@@ -250,13 +263,15 @@ public:
     size_t      h;
     size_t      h_stride;
 };
+
+
 static inline bool valid_matrix(const matrix_fp32_t *ma, const matrix_fp32_t * mb, float delta){
     int i;
     int errs = 0;
     assert(ma && mb);
-    assert(ma->elem() == mb->elem());
-    //std::cout<<"ma:"<<ma->elem()<<", mb:"<<mb->elem()<<std::endl;
-    for(i=0;i<(int) (ma->elem());i++){
+    size_t elements = matrix_elem_t()(ma->row, ma->col, ma->inc_row, ma->inc_col);
+    assert(elements == matrix_elem_t()(mb->row, mb->col, mb->inc_row, mb->inc_col));
+    for(i=0;i<(int) (elements);i++){
         float d = ma->data[i] - mb->data[i];
         d = ABS(d);
         if(d>delta){

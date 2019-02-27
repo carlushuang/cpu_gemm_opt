@@ -141,8 +141,8 @@ struct bench_result{
     }
 };
 
-#define LOOPS 4
-#define LOOP_WARMUP 1
+#define LOOPS 5
+#define LOOP_WARMUP 2
 
 class gemm_problem_t{
 public:
@@ -162,10 +162,9 @@ public:
         freq = freq_;
 
         gemm_desc = new gemm_desc_t(m,n,k,layout,trans_a,trans_b);
-        int row, col, inc_row, inc_col;
+        size_t row, col, inc_row, inc_col;
         std::tie(row, col, inc_row, inc_col) = gemm_desc->get_a();
         A = new matrix_fp32_t(row, col, inc_row, inc_col, layout, trans_a, align);
-        
 
         std::tie(row, col, inc_row, inc_col) = gemm_desc->get_b();
         B = new matrix_fp32_t(row, col, inc_row, inc_col, layout, trans_b, align);
@@ -382,6 +381,7 @@ public:
     }
     void run(double freq, bool validate_only = false){
         config cfg;
+        printf("freq: %.1fMHz, theoritical: %.3f gflops (avx256,fmadd)\n", freq, get_peak_gflops_fp32(freq));
         printf("MC:%d, NC:%d, KC:%d, MR:%d, NR:%d\n", BLOCK_M, BLOCK_N, BLOCK_K, MR, NR);
         assert( ((BLOCK_M % MR) == 0) && ((BLOCK_N % NR) == 0) && "MC%MR, NC%NR must be zero\n");
         printf("require: L1:%.1fKB(KC*NR*4), L2:%.1fKB(KC*MC*4), L3:%.1fKB(KC*NC*4)\n", req_l1()/1024.0, req_l2()/1024.0, req_l3()/1024.0);
