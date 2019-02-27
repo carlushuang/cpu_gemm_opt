@@ -536,6 +536,7 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
 }
 #endif
 #if 1
+// #define PACK_B_MULTIPLE_ALPHA
 static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
@@ -559,9 +560,9 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "movq               %5,             %%r8        \n" // n_itr
     "movq               %6,             %%r9        \n" // n_rem
     "movq               %7,             %%r10       \n" // alpha_addr
-
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vbroadcastss       (%%r10),        %%ymm15     \n" // alpha
-
+#endif
     // n_itr
     "testq              %%r8,           %%r8        \n"
     "je                 .B16_LOOP_N_ITR_DONE        \n"
@@ -587,7 +588,7 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "vmovups          32(%%r14, %%rcx, 2),  %%ymm5  \n"
     "vmovups            (%%r14, %%r11, 1),  %%ymm6  \n"
     "vmovups          32(%%r14, %%r11, 1),  %%ymm7  \n"
-
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vmulps             %%ymm15, %%ymm0,    %%ymm0  \n"
     "vmulps             %%ymm15, %%ymm1,    %%ymm1  \n"
     "vmulps             %%ymm15, %%ymm2,    %%ymm2  \n"
@@ -596,7 +597,7 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "vmulps             %%ymm15, %%ymm5,    %%ymm5  \n"
     "vmulps             %%ymm15, %%ymm6,    %%ymm6  \n"
     "vmulps             %%ymm15, %%ymm7,    %%ymm7  \n"
-
+#endif
     "vmovups            %%ymm0,             (%%rbx) \n"
     "vmovups            %%ymm1,         32*1(%%rbx) \n"
     "vmovups            %%ymm2,         32*2(%%rbx) \n"
@@ -617,7 +618,7 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "vmovups          32(%%r14, %%rcx, 2),  %%ymm5  \n"
     "vmovups            (%%r14, %%r11, 1),  %%ymm6  \n"
     "vmovups          32(%%r14, %%r11, 1),  %%ymm7  \n"
-
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vmulps             %%ymm15, %%ymm0,    %%ymm0  \n"
     "vmulps             %%ymm15, %%ymm1,    %%ymm1  \n"
     "vmulps             %%ymm15, %%ymm2,    %%ymm2  \n"
@@ -626,7 +627,7 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "vmulps             %%ymm15, %%ymm5,    %%ymm5  \n"
     "vmulps             %%ymm15, %%ymm6,    %%ymm6  \n"
     "vmulps             %%ymm15, %%ymm7,    %%ymm7  \n"
-
+#endif
     "vmovups            %%ymm0,             (%%rbx) \n"
     "vmovups            %%ymm1,         32*1(%%rbx) \n"
     "vmovups            %%ymm2,         32*2(%%rbx) \n"
@@ -650,10 +651,10 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     ".B16_LOOP_K_REM:                               \n"
     "vmovups            (%%r14),            %%ymm0  \n"
     "vmovups          32(%%r14),            %%ymm1  \n"
-
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vmulps             %%ymm15, %%ymm0,    %%ymm0  \n"
     "vmulps             %%ymm15, %%ymm1,    %%ymm1  \n"
-
+#endif
     "vmovups            %%ymm0,             (%%rbx) \n"
     "vmovups            %%ymm1,           32(%%rbx) \n"
 
@@ -673,8 +674,9 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "testq              %%r9,           %%r9        \n" // n_rem
     "je                 .B16_LOOP_N_REM_DONE        \n"
 
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vmovss             (%%r10),        %%xmm7      \n" // load alpha
-
+#endif
     "movq               %%r9,           %%r8        \n"
     "shlq               $2,             %%r8        \n" // *4
     "leaq               (%%r8, %%r8, 2),    %%r10   \n" // 3x
@@ -694,12 +696,12 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "vmovss             (%%r14,%%rcx),      %%xmm1  \n"
     "vmovss             (%%r14,%%rcx,2),    %%xmm2  \n"
     "vmovss             (%%r14,%%r11),      %%xmm3  \n"
-
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vmulss             %%xmm7, %%xmm0,     %%xmm0  \n"
     "vmulss             %%xmm7, %%xmm1,     %%xmm1  \n"
     "vmulss             %%xmm7, %%xmm2,     %%xmm2  \n"
     "vmulss             %%xmm7, %%xmm3,     %%xmm3  \n"
-
+#endif
     "vmovss             %%xmm0,             (%%r15) \n"
     "vmovss             %%xmm1,    (%%r15, %%r8, 1) \n"
     "vmovss             %%xmm2,    (%%r15, %%r8, 2) \n"
@@ -712,12 +714,12 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "vmovss             (%%r14,%%rcx),      %%xmm1  \n"
     "vmovss             (%%r14,%%rcx,2),    %%xmm2  \n"
     "vmovss             (%%r14,%%r11),      %%xmm3  \n"
-
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vmulss             %%xmm7, %%xmm0,     %%xmm0  \n"
     "vmulss             %%xmm7, %%xmm1,     %%xmm1  \n"
     "vmulss             %%xmm7, %%xmm2,     %%xmm2  \n"
     "vmulss             %%xmm7, %%xmm3,     %%xmm3  \n"
-
+#endif
     "vmovss             %%xmm0,             (%%r15) \n"
     "vmovss             %%xmm1,    (%%r15, %%r8, 1) \n"
     "vmovss             %%xmm2,    (%%r15, %%r8, 2) \n"
@@ -735,7 +737,9 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "movq               %%rdi,          %%rdx       \n"
     ".B16_LOOP_K_REM_IN_N_REM:                      \n"
     "vmovss             (%%r14),            %%xmm0  \n"
+#ifdef PACK_B_MULTIPLE_ALPHA
     "vmulss             %%xmm7, %%xmm0,     %%xmm0  \n"
+#endif
     "vmovss             %%xmm0,             (%%r15) \n"
 
     "leaq               (%%r14, %%rcx, 1),  %%r14   \n"

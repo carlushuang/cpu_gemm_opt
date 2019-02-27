@@ -28,11 +28,28 @@ void sgemm_macro_kernel(
         float * C,
         int    ldc )
 {
+#if 0
     int mr, nr, mr_sz, nr_sz;
     for(mr=0;mr<mc;mr+=MR){
         mr_sz = MIN(mc-mr, MR);
         for(nr=0;nr<nc;nr+=NR){
             nr_sz = MIN(nc-nr, NR);
+            sgemm_micro_kernel(mr_sz, nr_sz, kc,
+                alpha,
+                packA + mr*kc,
+                packB + nr*kc,
+                beta,
+                C+mr*ldc+nr, ldc);
+        }
+    }
+#endif
+    int mr, nr, mr_sz, nr_sz;
+    for(nr=0;nr<nc;nr+=NR){
+        nr_sz = MIN(nc-nr, NR);
+        for(mr=0;mr<mc;mr+=MR){
+            // mr loop, keep loop over A mr block, hence let micro kernel assumption fit what blis say
+            // here B block keep the same for every iter of mr, let later B fit in L1
+            mr_sz = MIN(mc-mr, MR);
             sgemm_micro_kernel(mr_sz, nr_sz, kc,
                 alpha,
                 packA + mr*kc,
