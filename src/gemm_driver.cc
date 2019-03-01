@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <iostream>
+#include <unistd.h>
 #include <string>
 #include <sstream>
 #include <unordered_map>
@@ -21,6 +22,11 @@ static double get_peak_gflops_fp32(double freq_mhz){
 #endif
 }
 
+static inline std::string _to_arg_name(const char *arg){
+    std::string s = std::string("-") + arg;
+    return s;
+}
+
 class arg_parser{
 #define ARG_VALUE_INIT "n/a"
 public:
@@ -34,13 +40,14 @@ public:
     ~arg_parser(){}
     void insert_arg(const char * arg, const char * help, std::string default_value){
         arg_store a;
-        a.arg_name = std::string("-") + arg;
+        a.arg_name = _to_arg_name(arg);
         a.help_str = help;
         a.default_value = default_value;
         a.value = ARG_VALUE_INIT;
         arg_pair[a.arg_name] = a;
     }
     bool parse(int argc, char ** argv){
+        this->parsed = true;
         for(int i=0;i<argc;i+=2){
             std::string arg_name = argv[i];
             if(arg_name == "--help" || arg_name == "-help"){
@@ -61,8 +68,25 @@ public:
         }
         return true;
     }
+    // call 
+    bool used_arg(const char * arg){
+        if(!this->parsed){
+            std::cerr<<"must call used_arg() after call parse()"<<std::endl;
+            assert(0 && "should not happen\n");
+        }
+        std::string arg_name = _to_arg_name(arg);
+        if(arg_pair.count(arg_name) == 0){
+            std::cerr<<"no such arg "<<arg_name<<std::endl;
+            usage();
+            assert(0 && "no such arg in parse arg");
+        }
+        std::string val = arg_pair[arg_name].value;
+        if(val == ARG_VALUE_INIT)
+            return false;
+        return true;
+    }
     std::string get_arg_str(const char * arg){
-        std::string arg_name = std::string("-") + arg;
+        std::string arg_name = _to_arg_name(arg);
         if(arg_pair.count(arg_name) == 0){
             std::cerr<<"no such arg "<<arg_name<<std::endl;
             usage();
@@ -117,6 +141,7 @@ public:
 private:
     std::string name;
     std::unordered_map<std::string, arg_store> arg_pair;
+    bool parsed {false};
 };
 
 struct bench_result{
@@ -124,7 +149,8 @@ struct bench_result{
     double          gflops;
     double          time_ms;    // cost for 1 loop
     double          perf;       // percentage
-    matrix_fp32_t * c;
+    matrix_fp32_t * c {nullptr};
+    bench_result(){}
     bench_result(int loops_, double gflops_, double time_ms_, double perf_, matrix_fp32_t * c_):
         loops(loops_),gflops(gflops_),time_ms(time_ms_),perf(perf_),c(c_){}
     bench_result(bench_result && rhs){
@@ -142,7 +168,7 @@ struct bench_result{
 };
 
 #define LOOPS 5
-#define LOOP_WARMUP 2
+#define LOOP_WARMUP 3
 
 class gemm_problem_t{
 public:
@@ -171,6 +197,9 @@ public:
 
         std::tie(row, col, inc_row, inc_col) = gemm_desc->get_c();
         C = new matrix_fp32_t(row, col, inc_row, inc_col, layout, TRANS_NO_TRANS, align);
+
+        loops = LOOPS;
+        loop_warmup = LOOP_WARMUP;
     }
     ~gemm_problem_t(){
         delete A;
@@ -180,7 +209,7 @@ public:
     }
 
     template<typename F>
-    bench_result run_bench(F gemm_func, bool validate_only = false){
+    bench_result run_single_case(F gemm_func, bool validate_only = false){
         matrix_fp32_t * c_out = new matrix_fp32_t(*C);
         //std::cout<<"[blas]layout:"<<layout<<", trans_a:"<<trans_a<<", trans_b:"<<trans_b<<
         //    ", m:"<<m<<", n:"<<n<<", k:"<<k<<", alpha:"<<alpha<<", beta:"<<beta<<
@@ -194,11 +223,13 @@ public:
                 B->data,B->h_stride,
                 beta,
                 c_out->data, c_out->h_stride);
-            return std::move(bench_result(0,0,0,0,c_out));
+            //https://en.cppreference.com/w/cpp/language/copy_elision 
+            //return std::move(bench_result(0,0,0,0,c_out));
+            return bench_result(0,0,0,0,c_out);
         }
 
         int i;
-        for(i=0;i<LOOP_WARMUP;i++){
+        for(i=0;i<this->loop_warmup;i++){
             gemm_func(layout,trans_a,trans_b,
                 m,n,k,
                 alpha,
@@ -208,7 +239,7 @@ public:
                 c_out->data, c_out->h_stride);
         }
         double start_time = current_sec();
-        for(i=0;i<LOOPS;i++){
+        for(i=0;i<this->loops;i++){
             gemm_func(layout,trans_a,trans_b,
                 m,n,k,
                 alpha,
@@ -217,15 +248,16 @@ public:
                 beta,
                 c_out->data, c_out->h_stride);
         }
-        double cost_per_loop = (current_sec()-start_time) / LOOPS;
+        double cost_per_loop = (current_sec()-start_time) / this->loops;
         unsigned long long flop = sgemm_flop(m,n,k,alpha,beta);
         double gflops = (double)flop/(cost_per_loop *1e9);
         double gflops_theory = get_peak_gflops_fp32(freq);
         delete c_out;
-        return std::move(bench_result(LOOPS, gflops, cost_per_loop*1e3, gflops/gflops_theory*100, nullptr));
+        //return std::move(bench_result(LOOPS, gflops, cost_per_loop*1e3, gflops/gflops_theory*100, nullptr));
+        return bench_result(this->loops, gflops, cost_per_loop*1e3, gflops/gflops_theory*100, nullptr);
     }
 
-private:
+//private:
     matrix_fp32_t *A;   // M*N
     matrix_fp32_t *B;   // N*K
     matrix_fp32_t *C;   // M*N
@@ -241,12 +273,15 @@ private:
     trans_t trans_b;
     size_t align;
     double freq;    // in MHz
+
+    int loop_warmup;
+    int loops;
 };
 
 // specilization for openblas cblas_sgemm function
 typedef decltype(&cblas_sgemm) cblas_sgemm_t;
 template<>
-bench_result gemm_problem_t::run_bench<cblas_sgemm_t>(cblas_sgemm_t cblas_gemm_func, bool validate_only){
+bench_result gemm_problem_t::run_single_case<cblas_sgemm_t>(cblas_sgemm_t cblas_gemm_func, bool validate_only){
     auto gemm_func = [&](layout_t _layout, trans_t _trans_a, trans_t _trans_b,
         int _m, int _n, int _k,
         const float _alpha,
@@ -258,7 +293,7 @@ bench_result gemm_problem_t::run_bench<cblas_sgemm_t>(cblas_sgemm_t cblas_gemm_f
         cblas_gemm_func(to_blas_layout(_layout),to_blas_transpose(_trans_a),to_blas_transpose(_trans_b),
             _m,_n,_k,_alpha,_A,_lda,_B,_ldb,_beta,_C,_ldc);
     };
-    return run_bench(gemm_func, validate_only);
+    return run_single_case(gemm_func, validate_only);
 }
 
 class gemm_bench{
@@ -379,39 +414,56 @@ public:
     inline int req_l3(){
         return BLOCK_K*BLOCK_N*sizeof(float);
     }
-    void run(double freq, bool validate_only = false){
+    void run(double freq, bool validate_only, gemm_problem_t * single_problem = nullptr){
         config cfg;
         printf("freq: %.1fMHz, theoritical: %.3f gflops (avx256,fmadd)\n", freq, get_peak_gflops_fp32(freq));
         printf("MC:%d, NC:%d, KC:%d, MR:%d, NR:%d\n", BLOCK_M, BLOCK_N, BLOCK_K, MR, NR);
         assert( ((BLOCK_M % MR) == 0) && ((BLOCK_N % NR) == 0) && "MC%MR, NC%NR must be zero\n");
         printf("require: L1:%.1fKB(KC*NR*4), L2:%.1fKB(KC*MC*4), L3:%.1fKB(KC*NC*4)\n", req_l1()/1024.0, req_l2()/1024.0, req_l3()/1024.0);
         printf("    M    N    K alpha beta   gflops(%%)   gflops_ref(%%)\n");
-        while(1){
-#define VALID_BENCH_CONFIG
-#ifdef VALID_BENCH_CONFIG
-            bool have_next = next_config(&cfg);
-#else
-            bool have_next = validate_only?
-                next_config_valid(&cfg):
-                next_config(&cfg); 
-#endif
-            if(!have_next)
-                break;
-            gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,32,freq);
-            bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, validate_only);
-            bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, validate_only);
-            
+
+        auto summary_func = [&](gemm_problem_t * prob, bench_result * r_ref, bench_result * r_opt){
             printf(" %4d %4d %4d  %.1f  %.1f %6.2f(%2.4f) %6.2f(%2.4f)",
-                cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,
-                rtn_opt.gflops,rtn_opt.perf,rtn_ref.gflops,rtn_ref.perf);
+                prob->m,prob->n,prob->k,prob->alpha,prob->beta,
+                r_opt->gflops,r_opt->perf,r_ref->gflops,r_ref->perf);
             if(validate_only){
-                bool result = valid_matrix(rtn_ref.c, rtn_opt.c, 0.001f);
+                bool result = valid_matrix(r_ref->c, r_opt->c, 0.001f);
                 if(result)
                     printf("  <valid>");
                 else
                     printf("  <fail>");
             }
             printf("\n");
+        };
+        while(1){
+            if(single_problem){
+                single_problem->loop_warmup += 15;
+                single_problem->loops  += 5;
+                bench_result rtn_ref = single_problem->run_single_case(cblas_sgemm, validate_only);
+                bench_result rtn_opt = single_problem->run_single_case(cblas_sgemm_opt, validate_only);
+                summary_func(single_problem, &rtn_ref, &rtn_opt);
+
+                break;
+            }
+            else{
+#define VALID_BENCH_CONFIG
+#ifdef VALID_BENCH_CONFIG
+                bool have_next = next_config(&cfg);
+#else
+                bool have_next = validate_only?
+                    next_config_valid(&cfg):
+                    next_config(&cfg); 
+#endif
+                if(!have_next)
+                    break;
+                
+                gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,32,freq);
+                bench_result rtn_ref = gemm_prob.run_single_case(cblas_sgemm, validate_only);
+                bench_result rtn_opt = gemm_prob.run_single_case(cblas_sgemm_opt, validate_only);
+
+                summary_func(&gemm_prob, &rtn_ref, &rtn_opt);
+                usleep(2000);
+            }
         }
     }
 
@@ -432,10 +484,14 @@ int main(int argc, char ** argv){
     args.insert_arg("tb", "translation for B, no|trans", "no");
     args.insert_arg("align", "memory alignment for matrix, in byte", MEM_ALIGN_BYTE);
     args.insert_arg("valid", "validate the result", "0");
-    args.insert_arg("bench", "benchmark mode, for all config", "1");
+    //args.insert_arg("bench", "benchmark mode, for all config", "1");
 
     if(!args.parse(argc-1, argv+1)) return -1;
     //args.dump_parsed();
+
+    bool one_shot = args.used_arg("m")
+                || args.used_arg("n") || args.used_arg("k")
+                || args.used_arg("a") || args.used_arg("b") ;
 
     int m = args.get_arg<int>("m");
     int n = args.get_arg<int>("n");
@@ -453,10 +509,22 @@ int main(int argc, char ** argv){
     trans_t trans_b = args.get_arg_choice<trans_t>("tb", trans_map);
     int align = args.get_arg<int>("align");
     bool valid = (args.get_arg<int>("valid")==1) ? true:false;
-    bool is_bench = (args.get_arg<int>("bench")==1) ? true:false;
+    //bool is_bench = (args.get_arg<int>("bench")==1) ? true:false;
 
     // force single thread openblas
     openblas_set_num_threads(1);
+
+    if(one_shot){
+        gemm_problem_t gemm_prob(m,n,k,alpha,beta,layout,trans_a,trans_b,align,freq);
+        gemm_bench gb;
+        gb.run(freq, valid, &gemm_prob);
+    }
+    else{
+        gemm_bench gb;
+        gb.run(freq, valid);
+        //return 0;
+    }
+#if 0
 
     if(is_bench){
         gemm_bench gb;
@@ -466,8 +534,8 @@ int main(int argc, char ** argv){
     args.dump_parsed();
 
     gemm_problem_t gemm_prob(m,n,k,alpha,beta,layout,trans_a,trans_b,align,freq);
-    bench_result rtn_ref = gemm_prob.run_bench(cblas_sgemm, valid);
-    bench_result rtn_opt = gemm_prob.run_bench(cblas_sgemm_opt, valid);
+    bench_result rtn_ref = gemm_prob.run_single_case(cblas_sgemm, valid);
+    bench_result rtn_opt = gemm_prob.run_single_case(cblas_sgemm_opt, valid);
 
     if(valid){
         bool result = valid_matrix(rtn_ref.c, rtn_opt.c, 0.001f);
@@ -476,6 +544,6 @@ int main(int argc, char ** argv){
         std::cout<<"[ref] gflops:"<<rtn_ref.gflops<<", time:"<<rtn_ref.time_ms<<"ms"<<std::endl;
         std::cout<<"[opt] gflops:"<<rtn_opt.gflops<<", time:"<<rtn_opt.time_ms<<"ms"<<std::endl;
     }
-
+#endif
     return 0;
 }

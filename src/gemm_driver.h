@@ -223,7 +223,8 @@ public:
         std::tie(h, w, h_stride) = matrix_cvt_t()(row,col,inc_row,inc_col,layout,trans);
     }
     ~matrix_fp32_t(){
-        __aligned_free(this->data);
+        if(data)
+            __aligned_free(this->data);
     }
 
     void __copy(const matrix_fp32_t & rhs){
@@ -248,7 +249,7 @@ public:
         return *this;
     }
 
-    float       *data;
+    float       *data {nullptr};
     size_t      row;
     size_t      col;
     size_t      inc_row;

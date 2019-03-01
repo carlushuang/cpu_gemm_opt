@@ -50,8 +50,8 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
-    unsigned long long k_itr = k/8;
-    unsigned long long k_rem = k%8;
+    unsigned long long k_itr = k/16;
+    unsigned long long k_rem = k%16;
     unsigned long long m_itr = m/6;
     unsigned long long m_rem = m%6;
     unsigned long long ld_ = ld;
@@ -83,6 +83,13 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "leaq           (%%rcx, %%rcx, 4),  %%r11       \n" // 5*rcx
 
     ".LOOP_K_ITR:                                   \n"
+    "prefetchnta    64(%%r14)                       \n"
+    "prefetchnta    64(%%r14,%%rcx,1)               \n"
+    "prefetchnta    64(%%r14,%%rcx,2)               \n"
+    "prefetchnta    64(%%r14,%%r10,1)               \n"
+    "prefetchnta    64(%%r14,%%rcx,4)               \n"
+    "prefetchnta    64(%%r14,%%r11,1)               \n"
+
     "vmovups        (%%r14),  %%ymm0                \n" // row 0
     "vmovups        (%%r14,%%rcx,1),    %%ymm1      \n" // row 1
     "vmovups        (%%r14,%%rcx,2),    %%ymm2      \n" // row 2
@@ -163,6 +170,89 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
 
     "addq           $8*4,           %%r14           \n" // src
     "addq           $6*8*4,         %%rbx           \n" // dest
+
+    "vmovups        (%%r14),  %%ymm0                \n" // row 0
+    "vmovups        (%%r14,%%rcx,1),    %%ymm1      \n" // row 1
+    "vmovups        (%%r14,%%rcx,2),    %%ymm2      \n" // row 2
+    "vmovups        (%%r14,%%r10,1),    %%ymm3      \n" // row 3
+    "vmovups        (%%r14,%%rcx,4),    %%ymm4      \n" // row 4
+    "vmovups        (%%r14,%%r11,1),    %%ymm5      \n" // row 5
+                                                    // lsb                         msb
+                                                    // origin:
+                                                    // X00 X01 X02 X03 X04 X05 X06 X07
+                                                    // X10 X11 X12 X13 X14 X15 X16 X17
+                                                    // X20 X21 X22 X23 X24 X25 X26 X27
+                                                    // X30 X31 X32 X33 X34 X35 X36 X37
+                                                    // X40 X41 X42 X43 X44 X45 X46 X47
+                                                    // X50 X51 X52 X53 X54 X55 X56 X57
+                                                    //
+                                                    // final:
+                                                    // X00 X10 X20 X30 X40 X50  
+                                                    // X01 X11 X21 X31 X41 X51  
+                                                    // X02 X12 X22 X32 X42 X52  
+                                                    // X03 X13 X23 X33 X43 X53  
+                                                    // X04 X14 X24 X34 X44 X54  
+                                                    // X05 X15 X25 X35 X45 X55  
+                                                    // X06 X16 X26 X36 X46 X56  
+                                                    // X07 X17 X27 X37 X47 X57
+                                                    //
+                                                    // reorg:
+                                                    // X00 X10 X20 X30 X40 X50 X01 X11
+                                                    // X21 X31 X41 X51 X02 X12 X22 X32
+                                                    // X42 X52 X03 X13 X23 X33 X43 X53
+                                                    // X04 X14 X24 X34 X44 X54 X05 X15
+                                                    // X25 X35 X45 X55 X06 X16 X26 X36
+                                                    // X46 X56 X07 X17 X27 X37 X47 X57
+    "vunpcklps      %%ymm1, %%ymm0, %%ymm6          \n"
+    "vunpckhps      %%ymm1, %%ymm0, %%ymm7          \n"
+    "vunpcklps      %%ymm3, %%ymm2, %%ymm8          \n"
+    "vunpckhps      %%ymm3, %%ymm2, %%ymm9          \n"
+    "vunpcklps      %%ymm5, %%ymm4, %%ymm10         \n"
+    "vunpckhps      %%ymm5, %%ymm4, %%ymm11         \n"
+                                                    // X00 X10 X01 X11 X04 X14 X05 X15
+                                                    // X02 X12 X03 X13 X06 X16 X07 X17
+                                                    // X20 X30 X21 X31 X24 X34 X25 X35
+                                                    // X22 X32 X23 X33 X26 X36 X27 X37
+                                                    // X40 X50 X41 X51 X44 X54 X45 X55
+                                                    // X42 X52 X43 X53 X46 X56 X47 X57
+
+    "vshufps        $0x44, %%ymm8,  %%ymm6,  %%ymm0 \n"
+    "vshufps        $0xee, %%ymm10, %%ymm8,  %%ymm1 \n"
+    "vshufps        $0xe4, %%ymm7,  %%ymm11, %%ymm2 \n"
+    "vshufps        $0xe4, %%ymm6,  %%ymm10, %%ymm3 \n"
+    "vshufps        $0x44, %%ymm9,  %%ymm7,  %%ymm4 \n"
+    "vshufps        $0xee, %%ymm11, %%ymm9,  %%ymm5 \n"
+                                                    // X00 X10 X20 X30 X04 X14 X24 X34
+                                                    // X21 X31 X41 X51 X25 X35 X45 X55
+                                                    // X42 X52 X03 X13 X46 X56 X07 X17
+                                                    // X40 X50 X01 X11 X44 X54 X05 X15
+                                                    // X02 X12 X22 X32 X06 X16 X26 X36
+                                                    // X23 X33 X43 X53 X27 X37 X47 X57
+
+    "vperm2f128     $0x20, %%ymm3, %%ymm0, %%ymm6   \n"
+    "vperm2f128     $0x20, %%ymm4, %%ymm1, %%ymm7   \n"
+    "vperm2f128     $0x20, %%ymm5, %%ymm2, %%ymm8   \n"
+    "vperm2f128     $0x31, %%ymm3, %%ymm0, %%ymm9   \n"
+    "vperm2f128     $0x31, %%ymm4, %%ymm1, %%ymm10  \n"
+    "vperm2f128     $0x31, %%ymm5, %%ymm2, %%ymm11  \n"
+                                                    // X00 X10 X20 X30 X40 X50 X01 X11
+                                                    // X21 X31 X41 X51 X02 X12 X22 X32
+                                                    // X42 X52 X03 X13 X23 X33 X43 X53
+                                                    // X04 X14 X24 X34 X44 X54 X05 X15
+                                                    // X25 X35 X45 X55 X06 X16 X26 X36
+                                                    // X46 X56 X07 X17 X27 X37 X47 X57
+
+    "vmovups        %%ymm6,         32*0(%%rbx)     \n"
+    "vmovups        %%ymm7,         32*1(%%rbx)     \n"
+    "vmovups        %%ymm8,         32*2(%%rbx)     \n"
+    "vmovups        %%ymm9,         32*3(%%rbx)     \n"
+    "vmovups        %%ymm10,        32*4(%%rbx)     \n"
+    "vmovups        %%ymm11,        32*5(%%rbx)     \n"
+
+    "addq           $8*4,           %%r14           \n" // src
+    "addq           $6*8*4,         %%rbx           \n" // dest
+
+
     "decq           %%rdx                           \n"
 
     "jne            .LOOP_K_ITR                     \n"
@@ -536,7 +626,7 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
 }
 #endif
 #if 1
-// #define PACK_B_MULTIPLE_ALPHA
+#define PACK_B_MULTIPLE_ALPHA
 static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
