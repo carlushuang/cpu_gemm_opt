@@ -2,6 +2,7 @@
 #define __UTIL_H
 
 #include <stddef.h>
+#include <vector>
 
 #ifndef MIN
 #define MIN(a,b) ( ((a)<(b)) ? (a):(b) )
@@ -19,6 +20,11 @@ double current_sec();
 void* __aligned_malloc(size_t required_bytes, size_t alignment);
 void __aligned_free(void *p);
 void rand_vector_f32(float * v, int elem);
+
+// TODO: need disable Intel HT(HyperThread). with HT on, seems thread use both virtual thread
+void set_current_affinity(const std::vector<int> & affinity);
+void get_current_affinity(std::vector<int> & affinity);
+int get_current_cpu();
 
 static inline unsigned long long sgemm_flop(unsigned long long M, unsigned long long N, unsigned long long K,
     float alpha, float beta)

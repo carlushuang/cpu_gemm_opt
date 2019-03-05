@@ -5,6 +5,10 @@
 #include <sys/time.h>
 #include <stdint.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
+#include <iostream>
+#include <assert.h>
 
 double current_sec()
 {
@@ -46,6 +50,41 @@ void rand_vector_f32(float * v, int elem) {
     for(i=0;i<elem;i++){
         v[i] = ((float)(rand() % 100)) / 100.0f;
     }
+};
+
+void set_current_affinity(const std::vector<int> & affinity){
+    //const pthread_t pid = pthread_self();
+    // cpu_set_t: This data set is a bitset where each bit represents a CPU.
+    cpu_set_t cpuset;
+    // CPU_ZERO: This macro initializes the CPU set set to be the empty set.
+    CPU_ZERO(&cpuset);
+    // CPU_SET: This macro adds cpu to the CPU set set.
+    for(int i=0;i<affinity.size();i++){
+        CPU_SET(affinity[i], &cpuset);
+        //std::cout<<"set cpu "<<affinity[i]<<std::endl;
+    }
+    int set_result = sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+    if(set_result != 0){
+        std::cerr<<"fail to sched_setaffinity for cores, err:"<<set_result<<std::endl;
+        assert(0);
+    }
+}
+void get_current_affinity(std::vector<int> & affinity){
+    cpu_set_t cpuset;
+    //pthread_t pid = pthread_self();
+    CPU_ZERO(&cpuset);
+    int set_result = sched_getaffinity(0, sizeof(cpu_set_t), &cpuset);
+    if(set_result != 0){
+        std::cerr<<"fail to sched_getaffinity for cores, err:"<<set_result<<std::endl;
+        assert(0);
+    }
+    for(int i=0;i<CPU_SETSIZE;i++){
+        if(CPU_ISSET(i, &cpuset))
+            affinity.push_back(i);
+    }
+}
+int get_current_cpu(){
+    return sched_getcpu();
 }
 
 #ifdef __x86_64

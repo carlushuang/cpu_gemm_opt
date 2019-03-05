@@ -17,7 +17,8 @@
 #define ALIGN_SIZE 32
 
 
-void sgemm_macro_kernel( 
+extern "C"
+void sgemm_macro_kernel(
         int    mc,
         int    nc,
         int    kc,

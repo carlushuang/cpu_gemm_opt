@@ -414,9 +414,19 @@ public:
     inline int req_l3(){
         return BLOCK_K*BLOCK_N*sizeof(float);
     }
-    void run(double freq, bool validate_only, gemm_problem_t * single_problem = nullptr){
+    void run(std::vector<int> cpu_list, double freq, bool validate_only, bool no_ref, gemm_problem_t * single_problem = nullptr){
         config cfg;
-        printf("freq: %.1fMHz, theoritical: %.3f gflops (avx256,fmadd)\n", freq, get_peak_gflops_fp32(freq));
+        auto cpu_list_to_str = [](const std::vector<int> cpu_list_){
+            std::string str;
+            for(int i=0;i<cpu_list_.size();i++){
+                str += std::to_string(cpu_list_[i]);
+                if(i != (cpu_list_.size()-1) )
+                    str += ",";
+            }
+            return str;
+        };
+        std::string cpu_list_str = cpu_list_to_str(cpu_list);
+        printf("cpu:%s, freq: %.1fMHz, theoritical: %.3f gflops (avx256,fmadd)\n", cpu_list_str.c_str(), freq, get_peak_gflops_fp32(freq));
         printf("MC:%d, NC:%d, KC:%d, MR:%d, NR:%d\n", BLOCK_M, BLOCK_N, BLOCK_K, MR, NR);
         assert( ((BLOCK_M % MR) == 0) && ((BLOCK_N % NR) == 0) && "MC%MR, NC%NR must be zero\n");
         printf("require: L1:%.1fKB(KC*NR*4), L2:%.1fKB(KC*MC*4), L3:%.1fKB(KC*NC*4)\n", req_l1()/1024.0, req_l2()/1024.0, req_l3()/1024.0);
@@ -425,8 +435,8 @@ public:
         auto summary_func = [&](gemm_problem_t * prob, bench_result * r_ref, bench_result * r_opt){
             printf(" %4d %4d %4d  %.1f  %.1f %6.2f(%2.4f) %6.2f(%2.4f)",
                 prob->m,prob->n,prob->k,prob->alpha,prob->beta,
-                r_opt->gflops,r_opt->perf,r_ref->gflops,r_ref->perf);
-            if(validate_only){
+                r_opt->gflops,r_opt->perf,r_ref?(r_ref->gflops):0,r_ref?(r_ref->perf):0);
+            if(validate_only && r_ref){
                 bool result = valid_matrix(r_ref->c, r_opt->c, 0.001f);
                 if(result)
                     printf("  <valid>");
@@ -435,13 +445,22 @@ public:
             }
             printf("\n");
         };
+        auto bench_single_func = [&](gemm_problem_t * prob){
+            if(no_ref){
+                bench_result rtn_opt = prob->run_single_case(cblas_sgemm_opt, validate_only);
+                summary_func(prob, nullptr, &rtn_opt);
+            }
+            else{
+                bench_result rtn_ref = prob->run_single_case(cblas_sgemm, validate_only);
+                bench_result rtn_opt = prob->run_single_case(cblas_sgemm_opt, validate_only);
+                summary_func(prob, &rtn_ref, &rtn_opt);
+            }
+        };
         while(1){
             if(single_problem){
-                single_problem->loop_warmup += 15;
-                single_problem->loops  += 5;
-                bench_result rtn_ref = single_problem->run_single_case(cblas_sgemm, validate_only);
-                bench_result rtn_opt = single_problem->run_single_case(cblas_sgemm_opt, validate_only);
-                summary_func(single_problem, &rtn_ref, &rtn_opt);
+                single_problem->loop_warmup *= 3;
+                single_problem->loops  *= 6;
+                bench_single_func(single_problem);
 
                 break;
             }
@@ -456,13 +475,10 @@ public:
 #endif
                 if(!have_next)
                     break;
-                
-                gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,32,freq);
-                bench_result rtn_ref = gemm_prob.run_single_case(cblas_sgemm, validate_only);
-                bench_result rtn_opt = gemm_prob.run_single_case(cblas_sgemm_opt, validate_only);
 
-                summary_func(&gemm_prob, &rtn_ref, &rtn_opt);
-                usleep(2000);
+                gemm_problem_t gemm_prob(cfg.m,cfg.n,cfg.k,cfg.alpha,cfg.beta,cfg.layout,cfg.trans_a,cfg.trans_b,32,freq);
+                bench_single_func(&gemm_prob);
+                //usleep(2000);
             }
         }
     }
@@ -484,6 +500,8 @@ int main(int argc, char ** argv){
     args.insert_arg("tb", "translation for B, no|trans", "no");
     args.insert_arg("align", "memory alignment for matrix, in byte", MEM_ALIGN_BYTE);
     args.insert_arg("valid", "validate the result", "0");
+    args.insert_arg("no_ref", "do not run reference blas", "0");
+    args.insert_arg("cpu", "run on which cpu", "2"); // TODO: cpu_list
     //args.insert_arg("bench", "benchmark mode, for all config", "1");
 
     if(!args.parse(argc-1, argv+1)) return -1;
@@ -503,26 +521,37 @@ int main(int argc, char ** argv){
     layout_t layout = args.get_arg_choice<layout_t>("layout", {
                         {"row", LAYOUT_ROW_MAJOR},
                         {"col", LAYOUT_COL_MAJOR}
-                        });
+                    });
     std::unordered_map<std::string, trans_t> trans_map = {{"no", TRANS_NO_TRANS},{"trans", TRANS_TRANS}};
     trans_t trans_a = args.get_arg_choice<trans_t>("ta", trans_map);
     trans_t trans_b = args.get_arg_choice<trans_t>("tb", trans_map);
     int align = args.get_arg<int>("align");
     bool valid = (args.get_arg<int>("valid")==1) ? true:false;
     //bool is_bench = (args.get_arg<int>("bench")==1) ? true:false;
+    bool no_ref = (args.get_arg<int>("no_ref") == 1) ? true:false;
+    int cpu = args.get_arg<int>("cpu");
+
+    std::vector<int> affinity;
+    affinity.push_back(cpu);
+    set_current_affinity(affinity); // TODO: need disable intel HT
+    std::vector<int> current_aff;
+    get_current_affinity(current_aff);
+
+    //int current_cpu = get_current_cpu();
+    //printf("current runing on cpu %d\n", current_cpu);
 
     // force single thread openblas
+    //if(!no_ref)
     openblas_set_num_threads(1);
 
     if(one_shot){
         gemm_problem_t gemm_prob(m,n,k,alpha,beta,layout,trans_a,trans_b,align,freq);
         gemm_bench gb;
-        gb.run(freq, valid, &gemm_prob);
+        gb.run(current_aff, freq, valid, no_ref, &gemm_prob);
     }
     else{
         gemm_bench gb;
-        gb.run(freq, valid);
-        //return 0;
+        gb.run(current_aff, freq, valid, no_ref, nullptr);
     }
 #if 0
 

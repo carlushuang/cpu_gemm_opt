@@ -29,7 +29,8 @@
 *
 * pack_A convert to col major for each tile
 */
-static void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_buf, float alpha){
+extern "C"
+void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_buf, float alpha){
     int mr,mr_sz, k, i;
     const float * ptr_a = A;
     float * ptr_a_pack = pack_buf;
@@ -45,8 +46,11 @@ static void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_
         }
     }
 }
-
-static void sgemm_pack_nn_A_mr6(int m, int n, int k,
+// https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html#AssemblerTemplate
+// symbol name should append '%='(assembler template) to avoid duplicate label in inline asm
+// such inline this function. support on gcc/clang
+extern "C"
+void sgemm_pack_nn_A_mr6(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
@@ -70,11 +74,11 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "shlq               $2,             %%rcx       \n" // ld*=4
 
     "testq              %%r8,           %%r8        \n"
-    "je                 .LOOP_M_ITR_DONE            \n"
+    "je                 .LOOP_M_ITR_DONE%=          \n"
 
-    ".LOOP_M_ITR:                                   \n"
+    ".LOOP_M_ITR%=:                                 \n"
     "testq          %%rsi,              %%rsi       \n" // test k_itr
-    "je             .LOOP_K_ITR_DONE                \n"
+    "je             .LOOP_K_ITR_DONE%=              \n"
 
     "movq           %%rsi,              %%rdx       \n" // restore k_itr
     "movq           %%rax,              %%r14       \n" // restore src
@@ -82,7 +86,7 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "leaq           (%%rcx, %%rcx, 2),  %%r10       \n" // 3*rcx
     "leaq           (%%rcx, %%rcx, 4),  %%r11       \n" // 5*rcx
 
-    ".LOOP_K_ITR:                                   \n"
+    ".LOOP_K_ITR%=:                                 \n"
     "prefetchnta    64(%%r14)                       \n"
     "prefetchnta    64(%%r14,%%rcx,1)               \n"
     "prefetchnta    64(%%r14,%%rcx,2)               \n"
@@ -255,16 +259,16 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
 
     "decq           %%rdx                           \n"
 
-    "jne            .LOOP_K_ITR                     \n"
+    "jne            .LOOP_K_ITR%=                   \n"
 
-    ".LOOP_K_ITR_DONE:                              \n"
+    ".LOOP_K_ITR_DONE%=:                            \n"
 
     "testq          %%rdi,              %%rdi       \n" // test k_rem
-    "je             .LOOP_K_REM_DONE                \n"
+    "je             .LOOP_K_REM_DONE%=              \n"
 
     "movq           %%rdi,              %%rdx       \n" // restore k_rem
 
-    ".LOOP_K_REM:                                   \n"
+    ".LOOP_K_REM%=:                                 \n"
     "vmovss         (%%r14),                %%xmm0  \n"
     "vmovss         (%%r14, %%rcx, 1),      %%xmm1  \n"
     "vmovss         (%%r14, %%rcx, 2),      %%xmm2  \n"
@@ -282,25 +286,25 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "addq           $4,             %%r14           \n" // src
     "addq           $6*4,           %%rbx           \n" // dest
     "decq           %%rdx                           \n"
-    "jne            .LOOP_K_REM                     \n"
+    "jne            .LOOP_K_REM%=                   \n"
 
-    ".LOOP_K_REM_DONE:                              \n"
+    ".LOOP_K_REM_DONE%=:                            \n"
 
     "addq           %%rcx,              %%r11       \n" // 6x
     "leaq           (%%rax, %%r11, 1),  %%rax       \n" // src += 6xld
     "decq           %%r8                            \n"
-    "jne            .LOOP_M_ITR                     \n"
+    "jne            .LOOP_M_ITR%=                   \n"
 
-    ".LOOP_M_ITR_DONE:                              \n"
+    ".LOOP_M_ITR_DONE%=:                            \n"
 
     "testq          %%r9,               %%r9        \n" // test m_rem
-    "je             .LOOP_M_REM_DONE                \n"
+    "je             .LOOP_M_REM_DONE%=              \n"
     "movq           %%r9,               %%r15       \n" // restore r_rem
     "shlq           $2,                 %%r9        \n" // *4
 
-    ".LOOP_M_REM:                                   \n"
+    ".LOOP_M_REM%=:                                 \n"
     "testq          %%rsi,              %%rsi       \n" // test k_itr
-    "je             .LOOP_K_ITR_IN_M_DONE           \n"
+    "je             .LOOP_K_ITR_IN_M_DONE%=         \n"
 
     "movq           %%rsi,              %%rdx       \n" // restore k_itr
 
@@ -314,7 +318,7 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "movq           %%r12,              %%r13       \n"
     "addq           %%r9,               %%r13       \n" // 7x
 
-    ".LOOP_K_ITR_IN_M:                              \n"
+    ".LOOP_K_ITR_IN_M%=:                            \n"
     "vmovss            (%%r14),         %%xmm0      \n"
     "vmovss         4*1(%%r14),         %%xmm1      \n"
     "vmovss         4*2(%%r14),         %%xmm2      \n"
@@ -336,29 +340,29 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "addq           $8*4,               %%r14       \n"
     "leaq           (%%r8,%%r9,8),      %%r8        \n"
     "decq           %%rdx                           \n"
-    "jne            .LOOP_K_ITR_IN_M                \n"
+    "jne            .LOOP_K_ITR_IN_M%=              \n"
 
-    ".LOOP_K_ITR_IN_M_DONE:                         \n"
+    ".LOOP_K_ITR_IN_M_DONE%=:                       \n"
     "testq          %%rdi,              %%rdi       \n"
-    "je             .LOOP_K_REM_IN_M_DONE           \n"
+    "je             .LOOP_K_REM_IN_M_DONE%=         \n"
     "movq           %%rdi,              %%rdx       \n"
 
-    ".LOOP_K_REM_IN_M:                              \n"
+    ".LOOP_K_REM_IN_M%=:                            \n"
     "vmovss         (%%r14),            %%xmm0      \n"
     "vmovss         %%xmm0,             (%%r8)      \n"
     "addq           $4,                 %%r14       \n"
     "leaq           (%%r8,%%r9,1),      %%r8        \n"
     "decq           %%rdx                           \n"
-    "jne            .LOOP_K_REM_IN_M                \n"
+    "jne            .LOOP_K_REM_IN_M%=              \n"
 
-    ".LOOP_K_REM_IN_M_DONE:                         \n"
+    ".LOOP_K_REM_IN_M_DONE%=:                       \n"
 
     "addq           $4,                 %%rbx       \n" // dest
     "leaq           (%%rax,%%rcx,1),    %%rax       \n" // src
     "decq           %%r15                           \n"
-    "jne            .LOOP_M_REM                     \n"
+    "jne            .LOOP_M_REM%=                   \n"
 
-    ".LOOP_M_REM_DONE:                              \n"
+    ".LOOP_M_REM_DONE%=:                            \n"
     ""
     ""
     : // output
@@ -381,7 +385,8 @@ static void sgemm_pack_nn_A_mr6(int m, int n, int k,
 #endif
 }
 
-static void sgemm_pack_nn_a(int m, int n, int k,
+extern "C"
+void sgemm_pack_nn_a(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
@@ -410,7 +415,8 @@ static void sgemm_pack_nn_a(int m, int n, int k,
 *  +---+
 *
 */
-static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_buf, float alpha){
+extern "C"
+void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_buf, float alpha){
     int k, nr, nr_sz, i;
     const float * ptr_b = B;
     float * ptr_b_pack = pack_buf;
@@ -424,7 +430,8 @@ static void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_
         }
     }
 }
-static void sgemm_pack_nn_b_nr8(int m, int n, int k,
+extern "C"
+void sgemm_pack_nn_b_nr8(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
@@ -526,7 +533,8 @@ static void sgemm_pack_nn_b_nr8(int m, int n, int k,
     }
 }
 #if 0
-static void sgemm_pack_nn_b_nr16(int m, int n, int k,
+extern "C"
+void sgemm_pack_nn_b_nr16(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
@@ -627,7 +635,8 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
 #endif
 #if 1
 #define PACK_B_MULTIPLE_ALPHA
-static void sgemm_pack_nn_b_nr16(int m, int n, int k,
+extern "C"
+void sgemm_pack_nn_b_nr16(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
@@ -655,21 +664,21 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
 #endif
     // n_itr
     "testq              %%r8,           %%r8        \n"
-    "je                 .B16_LOOP_N_ITR_DONE        \n"
+    "je                 .B16_LOOP_N_ITR_DONE%=      \n"
 
     "shlq               $2,             %%rcx       \n"
 
-    ".B16_LOOP_N_ITR:                               \n"
+    ".B16_LOOP_N_ITR%=:                             \n"
 
     "testq              %%rsi,          %%rsi       \n"
-    "je                 .B16_LOOP_K_ITR_DONE        \n"
+    "je                 .B16_LOOP_K_ITR_DONE%=      \n"
 
     "leaq               (%%rcx, %%rcx, 2),  %%r11   \n" // 3x ld
 
     "movq               %%rsi,          %%rdx       \n" // restore k_itr
     "movq               %%rax,          %%r14       \n" // restore src
     //"movq               %%rbx,          %%r15       \n" // restore dest
-    ".B16_LOOP_K_ITR:                               \n"
+    ".B16_LOOP_K_ITR%=:                             \n"
     "vmovups            (%%r14),            %%ymm0  \n"
     "vmovups          32(%%r14),            %%ymm1  \n"
     "vmovups            (%%r14, %%rcx),     %%ymm2  \n"
@@ -731,14 +740,14 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "addq               $32*8,              %%rbx   \n"
 
     "decq               %%rdx                       \n"
-    "jne                .B16_LOOP_K_ITR             \n"
-    ".B16_LOOP_K_ITR_DONE:                          \n"
+    "jne                .B16_LOOP_K_ITR%=           \n"
+    ".B16_LOOP_K_ITR_DONE%=:                        \n"
 
     "testq              %%rdi,          %%rdi       \n"
-    "je                 .B16_LOOP_K_REM_DONE        \n"
+    "je                 .B16_LOOP_K_REM_DONE%=      \n"
     "movq               %%rdi,          %%rdx       \n" // restore k_itr
 
-    ".B16_LOOP_K_REM:                               \n"
+    ".B16_LOOP_K_REM%=:                             \n"
     "vmovups            (%%r14),            %%ymm0  \n"
     "vmovups          32(%%r14),            %%ymm1  \n"
 #ifdef PACK_B_MULTIPLE_ALPHA
@@ -752,17 +761,17 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "addq               $32*2,              %%rbx   \n"
 
     "decq               %%rdx                       \n"
-    "jne                .B16_LOOP_K_REM             \n"
-    ".B16_LOOP_K_REM_DONE:                          \n"
+    "jne                .B16_LOOP_K_REM%=           \n"
+    ".B16_LOOP_K_REM_DONE%=:                        \n"
     
     "addq               $16*4,              %%rax   \n" // inc src, dst is updated inside loop
     "decq               %%r8                        \n"
-    "jne                .B16_LOOP_N_ITR             \n"
-    ".B16_LOOP_N_ITR_DONE:                          \n"
+    "jne                .B16_LOOP_N_ITR%=           \n"
+    ".B16_LOOP_N_ITR_DONE%=:                        \n"
 
     // n_rem
     "testq              %%r9,           %%r9        \n" // n_rem
-    "je                 .B16_LOOP_N_REM_DONE        \n"
+    "je                 .B16_LOOP_N_REM_DONE%=      \n"
 
 #ifdef PACK_B_MULTIPLE_ALPHA
     "vmovss             (%%r10),        %%xmm7      \n" // load alpha
@@ -772,16 +781,16 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "leaq               (%%r8, %%r8, 2),    %%r10   \n" // 3x
     "leaq               (%%rcx, %%rcx, 2),  %%r11   \n" // 3x ld
     
-    ".B16_LOOP_N_REM:                               \n"
+    ".B16_LOOP_N_REM%=:                             \n"
 
     "testq              %%rsi,          %%rsi       \n"
-    "je           .B16_LOOP_K_ITR_IN_N_REM_DONE     \n"
+    "je           .B16_LOOP_K_ITR_IN_N_REM_DONE%=   \n"
     "movq               %%rsi,          %%rdx       \n" // k_itr
 
     "movq               %%rax,          %%r14       \n" // restore src
     "movq               %%rbx,          %%r15       \n" // restore dest
 
-    ".B16_LOOP_K_ITR_IN_N_REM:                      \n"
+    ".B16_LOOP_K_ITR_IN_N_REM%=:                    \n"
     "vmovss             (%%r14),            %%xmm0  \n"
     "vmovss             (%%r14,%%rcx),      %%xmm1  \n"
     "vmovss             (%%r14,%%rcx,2),    %%xmm2  \n"
@@ -819,13 +828,13 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "leaq               (%%r15, %%r8,  4),  %%r15   \n"
 
     "decq               %%rdx                       \n"
-    "jne                .B16_LOOP_K_ITR_IN_N_REM    \n"
-    ".B16_LOOP_K_ITR_IN_N_REM_DONE:                 \n"
+    "jne                .B16_LOOP_K_ITR_IN_N_REM%=  \n"
+    ".B16_LOOP_K_ITR_IN_N_REM_DONE%=:               \n"
 
     "testq              %%rdi,          %%rdi       \n"
-    "je              .B16_LOOP_K_REM_IN_N_REM_DONE  \n"
+    "je              .B16_LOOP_K_REM_IN_N_REM_DONE%=\n"
     "movq               %%rdi,          %%rdx       \n"
-    ".B16_LOOP_K_REM_IN_N_REM:                      \n"
+    ".B16_LOOP_K_REM_IN_N_REM%=:                    \n"
     "vmovss             (%%r14),            %%xmm0  \n"
 #ifdef PACK_B_MULTIPLE_ALPHA
     "vmulss             %%xmm7, %%xmm0,     %%xmm0  \n"
@@ -836,15 +845,15 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "leaq               (%%r15, %%r8,  1),  %%r15   \n"
 
     "decq               %%rdx                       \n"
-    "jne                .B16_LOOP_K_REM_IN_N_REM    \n"
-    ".B16_LOOP_K_REM_IN_N_REM_DONE:                 \n"
+    "jne                .B16_LOOP_K_REM_IN_N_REM%=  \n"
+    ".B16_LOOP_K_REM_IN_N_REM_DONE%=:               \n"
 
     "addq               $4,                 %%rax   \n"
     "addq               $4,                 %%rbx   \n"
 
     "decq               %%r9                        \n"
-    "jne                .B16_LOOP_N_REM             \n"
-    ".B16_LOOP_N_REM_DONE:                          \n"
+    "jne                .B16_LOOP_N_REM%=           \n"
+    ".B16_LOOP_N_REM_DONE%=:                        \n"
 
     : // output
     : // input
@@ -866,7 +875,8 @@ static void sgemm_pack_nn_b_nr16(int m, int n, int k,
     );
 }
 #endif
-static void sgemm_pack_nn_b(int m, int n, int k,
+extern "C"
+void sgemm_pack_nn_b(int m, int n, int k,
     float alpha, const float * src,
     int ld, float * dest)
 {
@@ -879,6 +889,7 @@ static void sgemm_pack_nn_b(int m, int n, int k,
 }
 
 //https://software.intel.com/en-us/mkl-developer-reference-c-cblas-gemm-pack
+extern "C"
 void sgemm_pack(layout_t layout, trans_t trans, identifier_t ident,
     int m, int n, int k,
     float alpha, const float * src,
