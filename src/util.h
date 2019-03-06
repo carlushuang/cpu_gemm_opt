@@ -19,7 +19,10 @@
 double current_sec();
 void* __aligned_malloc(size_t required_bytes, size_t alignment);
 void __aligned_free(void *p);
-void rand_vector_f32(float * v, int elem);
+
+template<typename T>
+void rand_vector(T* v, int elem);
+
 
 // TODO: need disable Intel HT(HyperThread). with HT on, seems thread use both virtual thread
 void set_current_affinity(const std::vector<int> & affinity);

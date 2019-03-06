@@ -61,6 +61,40 @@ void sgemm_macro_kernel(
     }
 }
 
+// C row major, A col major, B row major
+extern "C"
+void sgemm_macro_kernel_n_tn(
+        int    mc,
+        int    nc,
+        int    kc,
+        float  alpha,
+        const float * packA,
+        const float * packB,
+        float  beta,
+        float * C,
+        int    ldc,
+        const gemm_context_t * ctx)
+{
+
+}
+
+// C col major, A col major, B row major
+extern "C"
+void sgemm_macro_kernel_t_tn(
+        int    mc,
+        int    nc,
+        int    kc,
+        float  alpha,
+        const float * packA,
+        const float * packB,
+        float  beta,
+        float * C,
+        int    ldc,
+        const gemm_context_t * ctx)
+{
+
+}
+
 static void scale_C(int mc, int nc, float beta, float * C, int ldc){
     float * c_itr = C;
     if(beta == 1.f){
@@ -87,14 +121,17 @@ static void scale_C(int mc, int nc, float beta, float * C, int ldc){
     }
 }
 
-// assume row major
-static void sgemm_nn(int M, int N, int K,
+// C row major, A row major, B row major
+static void sgemm_n_nn(
+                int M, int N, int K,
                 float alpha,
                 const float *A, int lda,
                 const float *B, int ldb,
                 float beta,
-                float *C, int ldc)
+                float *C, int ldc,
+                const gemm_context_t * ctx)
 {
+#if 0
     int nc, nc_size, kc, kc_size, mc, mc_size;
     // blis algorithm
     float * A_pack = (float*)__aligned_malloc(BLOCK_M*BLOCK_K*sizeof(float), ALIGN_SIZE);
@@ -127,6 +164,124 @@ static void sgemm_nn(int M, int N, int K,
     }
     __aligned_free(A_pack);
     __aligned_free(B_pack);
+#endif
+    size_t nc, nc_size, kc, kc_size, mc, mc_size;
+    size_t p_mc, p_nc, p_kc;
+    p_mc = ctx->mc;
+    p_nc = ctx->nc;
+    p_kc = ctx->kc;
+
+    float * A_pack = sgemm_alloc(IDENT_A_MATRIX, M, N, K, ctx);
+    float * B_pack = sgemm_alloc(IDENT_B_MATRIX, M, N, K, ctx);
+
+    for(mc=0; mc<M; mc += p_mc){
+        mc_size = MIN(M-mc, p_mc);
+        for(kc=0; kc<K; kc += p_kc){
+            kc_size = MIN(K-kc, p_kc);
+            sgemm_pack(LAYOUT_ROW_MAJOR, TRANS_NO_TRANS, IDENT_A_MATRIX,
+                    mc_size, 0, kc_size,
+                    alpha, A + mc*lda + kc, lda, A_pack, ctx);
+            for(nc=0; nc<N; nc += p_nc){
+                nc_size = MIN(N-nc, p_nc);
+                sgemm_pack(LAYOUT_ROW_MAJOR, TRANS_NO_TRANS, IDENT_B_MATRIX,
+                    0, nc_size, kc_size,
+                    alpha, B + kc*ldb + nc, ldb, B_pack, ctx);
+
+                if( kc==0 )
+                    scale_C(mc_size, nc_size, beta, C+mc*ldc+nc, ldc);
+
+                sgemm_macro_kernel_n_tn(mc_size, nc_size, kc_size,
+                    alpha, A_pack, B_pack,
+                    beta, C+mc*ldc+nc, ldc, ctx);
+            }
+        }
+    }
+    sgemm_free(A_pack);
+    sgemm_free(B_pack);
+}
+
+static void sgemm_n_nt(
+                int M, int N, int K,
+                float alpha,
+                const float *A, int lda,
+                const float *B, int ldb,
+                float beta,
+                float *C, int ldc,
+                const gemm_context_t * ctx)
+{
+    // TOTO: implement
+}
+
+static void sgemm_n_tn(
+                int M, int N, int K,
+                float alpha,
+                const float *A, int lda,
+                const float *B, int ldb,
+                float beta,
+                float *C, int ldc,
+                const gemm_context_t * ctx)
+{
+    // TOTO: implement
+}
+
+static void sgemm_n_tt(
+                int M, int N, int K,
+                float alpha,
+                const float *A, int lda,
+                const float *B, int ldb,
+                float beta,
+                float *C, int ldc,
+                const gemm_context_t * ctx)
+{
+    // TOTO: implement
+}
+
+static void sgemm_t_tt(
+                int M, int N, int K,
+                float alpha,
+                const float *A, int lda,
+                const float *B, int ldb,
+                float beta,
+                float *C, int ldc,
+                const gemm_context_t * ctx)
+{
+    // TOTO: implement
+}
+
+static void sgemm_t_tn(
+                int M, int N, int K,
+                float alpha,
+                const float *A, int lda,
+                const float *B, int ldb,
+                float beta,
+                float *C, int ldc,
+                const gemm_context_t * ctx)
+{
+    // TOTO: implement
+}
+
+static void sgemm_t_nt(
+                int M, int N, int K,
+                float alpha,
+                const float *A, int lda,
+                const float *B, int ldb,
+                float beta,
+                float *C, int ldc,
+                const gemm_context_t * ctx)
+{
+    // TOTO: implement
+}
+
+static void sgemm_t_nn(
+                int M, int N, int K,
+                float alpha,
+                const float *A, int lda,
+                const float *B, int ldb,
+                float beta,
+                float *C, int ldc,
+                const gemm_context_t * ctx)
+{
+    // TOTO: implement
 }
 
 void cblas_sgemm_opt(layout_t Layout, trans_t Trans_a, trans_t Trans_b,
@@ -135,20 +290,37 @@ void cblas_sgemm_opt(layout_t Layout, trans_t Trans_a, trans_t Trans_b,
                 const float *A, int lda,
                 const float *B, int ldb,
                 float beta,
-                float *C, int ldc)
+                float *C, int ldc,
+                const gemm_context_t * ctx)
 {
     // https://github.com/flame/how-to-optimize-gemm/wiki/Optimization_4x4_8
     if(Layout == LAYOUT_ROW_MAJOR){
         if(Trans_a == TRANS_NO_TRANS || Trans_a == TRANS_CONJ_NO_TRANS){
             if(Trans_b == TRANS_NO_TRANS|| Trans_b== TRANS_CONJ_NO_TRANS){
-                sgemm_nn(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc);
+                sgemm_n_nn(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
             }else{
-
+                sgemm_n_nt(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
             }
         }else{
-
+            if(Trans_b == TRANS_NO_TRANS|| Trans_b== TRANS_CONJ_NO_TRANS){
+                sgemm_n_tn(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
+            }else{
+                sgemm_n_tt(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
+            }
         }
     } else {
-        //
+        if(Trans_a == TRANS_NO_TRANS || Trans_a == TRANS_CONJ_NO_TRANS){
+            if(Trans_b == TRANS_NO_TRANS|| Trans_b== TRANS_CONJ_NO_TRANS){
+                sgemm_t_tt(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
+            }else{
+                sgemm_t_tn(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
+            }
+        }else{
+            if(Trans_b == TRANS_NO_TRANS|| Trans_b== TRANS_CONJ_NO_TRANS){
+                sgemm_t_nt(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
+            }else{
+                sgemm_t_nn(M,N,K,alpha,A,lda,B,ldb,beta,C,ldc,ctx);
+            }
+        }
     }
 }

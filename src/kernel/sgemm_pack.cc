@@ -3,6 +3,8 @@
 #include "../gemm_config.h"
 #include "../gemm_driver.h"
 #include "sgemm_pack.h"
+#include <iostream>
+#include <assert.h>
 
 /*
 *    assume A is row major
@@ -888,13 +890,166 @@ void sgemm_pack_nn_b(int m, int n, int k,
     return pack_B(n,k,src,ld,dest,alpha);
 }
 
+
+
+
+/***************************************************************************
+ * packing for A
+ *
+ * we always look for the packing result of A as follow,
+ * no matter input layout of A:
+ *          (below layout is row major and dense, aka continuous in memory)
+ * 
+ *     MR
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ * 
+ *  for each MR*KC of A, prefer addressable by 1 TLB entry (1 PAGE_SIZE and alignment)
+ */
+static float * sgemm_alloc_a(int m, int n, int k, const gemm_context_t * ctx){
+    size_t mr, kc, page_size;
+    mr = ctx->mr;
+    kc = ctx->kc;
+    page_size = ctx->page_size;
+
+    size_t block_bytes = mr*kc*sizeof(float);
+    if(block_bytes > page_size){
+        std::cerr<<"size for a mr*kc block is bigger than page_size, not supported now."<<
+        ", mr:"<<mr<<", kc:"<<kc<<", page_size:"<<page_size<<std::endl;
+        assert(0);
+    }
+
+    assert(k);
+    size_t num_pages = ((size_t)k-1)/kc+1; // every mr*kc need align to PAGE_SIZE
+    return (float*)__aligned_malloc(num_pages * page_size, page_size);
+}
+static void sgemm_pack_n_a_n(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+static void sgemm_pack_n_a_t(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+
+static void sgemm_pack_t_a_n(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+
+static void sgemm_pack_t_a_t(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+
+/***************************************************************************
+ * packing for B
+ *
+ * we always look for the packing result of B as follow,
+ * no matter input layout of B:
+ *          (below layout is row major and dense, aka continuous in memory)
+ * 
+ *     NR
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ * 
+ * for each NR*KC of B, prefer addressable by 1 TLB entry (1 PAGE_SIZE and alignment)
+ */
+static float * sgemm_alloc_b(int m, int n, int k, const gemm_context_t * ctx){
+    size_t nr, kc, page_size;
+    nr = ctx->nr;
+    kc = ctx->kc;
+    page_size = ctx->page_size;
+
+    size_t block_bytes = nr*kc*sizeof(float);
+    if(block_bytes > page_size){
+        std::cerr<<"size for a nr*kc block is bigger than page_size, not supported now."<<
+        ", nr:"<<nr<<", kc:"<<kc<<", page_size:"<<page_size<<std::endl;
+        assert(0);
+    }
+
+    assert(k);
+    size_t num_pages = ((size_t)k-1)/kc+1; // every nr*kc need align to PAGE_SIZE
+    return (float*)__aligned_malloc(num_pages * page_size, page_size);
+}
+static void sgemm_pack_n_b_n(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+    
+}
+static void sgemm_pack_n_b_t(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+
+static void sgemm_pack_t_b_n(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+
+
+static void sgemm_pack_t_b_t(int m, int n, int k,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+
+
+/***************************************************************************
+ * 
+ * 
+ * 
+*/
+
+// https://software.intel.com/en-us/mkl-developer-reference-c-cblas-gemm-alloc
+extern "C"
+float * sgemm_alloc(identifier_t ident, int m, int n, int k, const gemm_context_t * ctx)
+{
+    if(ident == IDENT_A_MATRIX)
+        return sgemm_alloc_a(m,n,k,ctx);
+    else
+        return sgemm_alloc_b(m,n,k,ctx);
+}
+
+extern "C"
+void sgemm_free(float * buf){
+    __aligned_free((void*)buf);
+}
+
 //https://software.intel.com/en-us/mkl-developer-reference-c-cblas-gemm-pack
 extern "C"
 void sgemm_pack(layout_t layout, trans_t trans, identifier_t ident,
     int m, int n, int k,
     float alpha, const float * src,
-    int ld, float * dest)
+    int ld, float * dest, const gemm_context_t * ctx)
 {
+#if 0
     if(layout == LAYOUT_ROW_MAJOR){
         if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
             if(ident == IDENT_A_MATRIX)
@@ -904,5 +1059,35 @@ void sgemm_pack(layout_t layout, trans_t trans, identifier_t ident,
         }
     }else{
 
+    }
+#endif
+    if(ident == IDENT_A_MATRIX){
+        if(layout == LAYOUT_ROW_MAJOR){
+            if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
+                sgemm_pack_n_a_n(m,n,k,alpha,src,ld,dest,ctx);
+            }else{
+                sgemm_pack_n_a_t(m,n,k,alpha,src,ld,dest,ctx);
+            }
+        }else{
+            if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
+                sgemm_pack_t_a_t(m,n,k,alpha,src,ld,dest,ctx);
+            }else{
+                sgemm_pack_t_a_n(m,n,k,alpha,src,ld,dest,ctx);
+            }
+        }
+    }else{
+        if(layout == LAYOUT_ROW_MAJOR){
+            if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
+                sgemm_pack_n_b_n(m,n,k,alpha,src,ld,dest,ctx);
+            }else{
+                sgemm_pack_n_b_t(m,n,k,alpha,src,ld,dest,ctx);
+            }
+        }else{
+            if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
+                sgemm_pack_t_b_t(m,n,k,alpha,src,ld,dest,ctx);
+            }else{
+                sgemm_pack_t_b_n(m,n,k,alpha,src,ld,dest,ctx);
+            }
+        }
     }
 }

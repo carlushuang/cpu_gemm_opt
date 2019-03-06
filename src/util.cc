@@ -41,16 +41,20 @@ void __aligned_free(void *p)
     free(((void**)p)[-1]);
 }
 
-void rand_vector_f32(float * v, int elem) {
+template<typename T>
+void rand_vector(T* v, int elem){
     int i;
 
     static int flag = 0;
     if(!flag){ srand(time(NULL)); flag = 1; }
 
     for(i=0;i<elem;i++){
-        v[i] = ((float)(rand() % 100)) / 100.0f;
+        v[i] = ((T)(rand() % 100)) / 100.0f;
     }
-};
+}
+// specialize function instance
+template void rand_vector<float>(float * v, int elem);
+template void rand_vector<double>(double * v, int elem);
 
 void set_current_affinity(const std::vector<int> & affinity){
     //const pthread_t pid = pthread_self();
