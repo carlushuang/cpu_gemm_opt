@@ -14,6 +14,10 @@
 // openblas
 #include <cblas.h>
 
+#ifndef CEIL
+#define CEIL(value, divider)  (   ((value)-1)/(divider)+1  )
+#endif
+
 typedef enum {
     LAYOUT_ROW_MAJOR = 0,
     LAYOUT_COL_MAJOR

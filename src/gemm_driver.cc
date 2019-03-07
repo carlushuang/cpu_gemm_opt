@@ -219,7 +219,7 @@ struct bench_result{
     }
 };
 
-#define LOOPS 5
+#define LOOPS 6
 #define LOOP_WARMUP 3
 
 template <typename T>
@@ -262,7 +262,25 @@ public:
         }
 
         int i;
-        for(i=0;i<this->loop_warmup;i++){
+        int l_warmup = this->loop_warmup;
+        int l_loop = this->loops;
+        // some speed up and stability modify
+        if(ctx->m < 600){
+            l_warmup = 5;
+            l_loop = 10;
+        }
+        else if(ctx->m < 1800){
+            l_warmup = 4; 
+            l_loop = 8;
+        }
+        else if(ctx->m > 3000){
+            l_warmup = 2;
+        }
+        else if(ctx->m > 6000){
+            l_warmup = 2;
+            l_loop = 4;
+        }
+        for(i=0;i<l_warmup;i++){
             gemm_func(ctx->layout,ctx->trans_a,ctx->trans_b,
                 ctx->m,ctx->n,ctx->k,
                 ctx->alpha,
@@ -272,7 +290,7 @@ public:
                 c_out->data, ctx->ldc, ctx);
         }
         double start_time = current_sec();
-        for(i=0;i<this->loops;i++){
+        for(i=0;i<l_loop;i++){
             gemm_func(ctx->layout,ctx->trans_a,ctx->trans_b,
                 ctx->m,ctx->n,ctx->k,
                 ctx->alpha,
@@ -281,13 +299,13 @@ public:
                 ctx->beta,
                 c_out->data, ctx->ldc, ctx);
         }
-        double cost_per_loop = (current_sec()-start_time) / this->loops;
+        double cost_per_loop = (current_sec()-start_time) / l_loop;
         unsigned long long flop = sgemm_flop(ctx->m,ctx->n,ctx->k,ctx->alpha,ctx->beta);
         double gflops = (double)flop/(cost_per_loop *1e9);
         double gflops_theory = peak_gflops_t<T>()(ctx->frequency);
         delete c_out;
         //return std::move(bench_result(LOOPS, gflops, cost_per_loop*1e3, gflops/gflops_theory*100, nullptr));
-        return bench_result<T>(this->loops, gflops, cost_per_loop*1e3, gflops/gflops_theory*100, nullptr);
+        return bench_result<T>(l_loop, gflops, cost_per_loop*1e3, gflops/gflops_theory*100, nullptr);
     }
     // used for cblas api call
     bench_result<T> run_single_case(cblas_sgemm_t cblas_gemm_func, bool validate_only){
@@ -306,7 +324,6 @@ public:
         };
         return run_single_case(gemm_func_wrapper, validate_only);
     }
-
 
 //private:
     matrix_t<T> *A;   // M*N
@@ -342,7 +359,7 @@ public:
     bool next_config(config * cfg){
         static int ITER_START = 48;
         static int ITER_STEP = 48;
-        static int ITER_END = 6144;
+        static int ITER_END = 9218;
         static float ALPHA = 1.0f;
         static float BETA  = 1.0f;
 
@@ -461,13 +478,127 @@ public:
             }
             return str;
         };
-        std::string cpu_list_str = cpu_list_to_str(ctx->cpu_list);
-        printf("cpu:%s, freq: %.1fMHz, theoritical: %.3f gflops (avx256,fmadd)\n", cpu_list_str.c_str(), ctx->frequency, peak_gflops_t<T>()(ctx->frequency));
-        printf("MC:%lu, NC:%lu, KC:%lu, MR:%lu, NR:%lu\n", ctx->mc, ctx->nc, ctx->kc, ctx->mr, ctx->nr);
-        assert( ((ctx->mc % ctx->mr) == 0) && ((ctx->nc % ctx->nr) == 0) && "MC%%MR, NC%%NR must be zero\n");
-        
-        //printf("require: L1:%.1fKB(KC*NR*4), L2:%.1fKB(KC*MC*4), L3:%.1fKB(KC*NC*4)\n", req_l1()/1024.0, req_l2()/1024.0, req_l3()/1024.0);
-        printf("    M    N    K alpha beta   gflops(%%)   gflops_ref(%%)\n");
+
+        auto byte_2_str = [](size_t bytes){
+            std::string str;
+            if(bytes < 1024){
+                str += std::to_string(bytes);
+                str += "B";
+            }else if (bytes < (1024*1024)){
+                size_t b;
+                size_t k;
+                b = bytes % (1024);
+                k = bytes / 1024;
+                str += std::to_string(k);
+                if(b != 0){
+                    str += ".";
+                    str += std::to_string(b*100/1024);  // .2f
+                }
+                str += "K";
+            }else{
+                size_t m;
+                size_t k;
+
+                m = bytes / (1024*1024);
+                k = bytes % (1024*1024);
+                str += std::to_string(m);
+                if(k != 0){
+                    str += ".";
+                    str += std::to_string(k*100/(1024*1024));
+                }
+                str += "M";
+            }
+            return str;
+        };
+
+        auto dump_ctx_func = [&](const gemm_context_t *ctx){
+            size_t mc, nc, kc, mr, nr;
+            size_t l1_size, l2_size, l3_size, tlb_entry_l1d, page_size;
+            mc = ctx->mc;
+            nc = ctx->nc;
+            kc = ctx->kc;
+            mr = ctx->mr;
+            nr = ctx->nr;
+            l1_size = ctx->l1_size;
+            l2_size = ctx->l2_size;
+            l3_size = ctx->l3_size;
+            tlb_entry_l1d = ctx->tlb_entry_l1d;
+            page_size = ctx->page_size;
+            
+            std::string cpu_list_str = cpu_list_to_str(ctx->cpu_list);
+            printf("cpu:%s, freq: %.1fMHz, theoritical: %.3f gflops (avx256,fmadd)\n",
+                            cpu_list_str.c_str(), ctx->frequency, peak_gflops_t<T>()(ctx->frequency));
+
+            std::string l1_size_str = byte_2_str(l1_size);
+            std::string l2_size_str = byte_2_str(l2_size);
+            std::string l3_size_str = byte_2_str(l3_size);
+            printf("l1_size:%s, l2_size:%s, l3_size:%s, page_size:%lu, tlb_entry_l1d:%lu\n",
+                            l1_size_str.c_str(), l2_size_str.c_str(), l3_size_str.c_str(), page_size, tlb_entry_l1d);
+            printf("MC:%lu, NC:%lu, KC:%lu, MR:%lu, NR:%lu\n",
+                            mc, nc, kc, mr, nr);
+            printf("layout:%s, trans_a:%s, trans_b:%s\n",
+                            to_layout_str(ctx->layout), to_trans_str(ctx->trans_a), to_trans_str(ctx->trans_b));
+            printf("Considerations:\n");
+            if(ctx->layout == LAYOUT_ROW_MAJOR){
+                size_t lhs, rhs;
+
+                lhs = mr*kc+nr*kc+mr*nr+nr+mr*nr;
+                rhs = l1_size/sizeof(float);
+                printf(" L1: MR*KC+NR*KC+MR*NR+NR+MR*NR < L1_size/d_size, lhs:%lu, rhs:%lu, match?%s\n",
+                        lhs, rhs, ((lhs<rhs)?"yes":"no"));
+                
+                lhs = nc*kc+mr*kc+mr*nc+mr*kc+mr*nc;
+                rhs = l2_size/sizeof(float);
+                printf(" L2: NC*KC+MR*KC+MR*NC+MR*KC+MR*NC < L2_size/d_size, lhs:%lu, rhs:%lu, match?%s\n",
+                        lhs, rhs, ((lhs<rhs)?"yes":"no"));
+
+                lhs = mc*kc + nc*kc + mc*nc + nc*kc + mc*nc;
+                rhs = l3_size/sizeof(float);
+                printf(" L3: MC*KC+NC*KC+MC*NC+NC*KC+MC*NC < L3_size/d_size, lhs:%lu, rhs:%lu, match?%s\n",
+                        lhs, rhs, ((lhs<rhs)?"yes":"no"));
+#if 0
+                size_t ta, tb, tc;
+                ta = CEIL(mr*kc*sizeof(float), page_size)+1;
+                tb = CEIL(nc*kc*sizeof(float), page_size)+1;
+                tc = mr;
+                printf(" L1D TLB:\n");
+                printf("   TA:ceil(MR*KC*dtype_size/PAGE_SIZE)+1, %lu\n", ta );
+                printf("   TB:ceil(NC*KC*dtype_size/PAGE_SIZE)+1, %lu\n", tb );
+                printf("   TC:up to MR, %lu\n", tc);
+
+                lhs = ta+2*(tb+tc);
+                rhs = tlb_entry_l1d;
+                printf("   no Caux: TA+(TB+TC)*2 < T_entry_total, lhs:%lu, rhs:%lu, match?%s\n",
+                        lhs, rhs, ((lhs<rhs)?"yes":"no"));
+
+                lhs = ta+2*tb+tc+1;
+                rhs = tlb_entry_l1d;
+                printf("   wi Caux: TA+2*TB+TC+1 < T_entry_total, lhs:%lu, rhs:%lu, match?%s\n",
+                        lhs, rhs, ((lhs<rhs)?"yes":"no"));
+
+                lhs = mr*kc*sizeof(float);
+                rhs = page_size;
+                printf(" packing A(mr*kc): MR*KC*dtype_size < PAGE_SIZE, lhs:%lu, rhs:%lu, match?%s\n",
+                        lhs, rhs, ((lhs<rhs)?"yes":"no"));
+#endif
+                printf(" L1D TLB:\n");
+
+                size_t ta, tb, tc;
+                ta = CEIL(mr*kc*sizeof(float), page_size)+1;
+                tb = CEIL(nr*kc*sizeof(float), page_size)+1;
+                tc = mr;
+                printf("  TA:CEIL(MR*KC*d_size/PAGE_SIZE)+1, %lu\n", ta);
+                printf("  TB:CEIL(NR*KC*d_size/PAGE_SIZE)+1, %lu\n", tb);
+                printf("  TC:up to MR, %lu\n", tc);
+
+                lhs = ta+2*tb+tc;
+                rhs = tlb_entry_l1d;
+                printf("  TA+2*(TB)+TC < T_entry_total, lhs:%lu, rhs:%lu, match?%s\n",
+                            lhs, rhs, ((lhs<rhs)?"yes":"no"));
+            }else{
+
+            }
+        };
 
         auto summary_func = [&](gemm_problem_t<T> * prob, bench_result<T> * r_ref, bench_result<T> * r_opt){
             printf(" %4lu %4lu %4lu  %.1f  %.1f %6.2f(%2.4f) %6.2f(%2.4f)",
@@ -482,6 +613,7 @@ public:
             }
             printf("\n");
         };
+
         auto bench_single_func = [&](gemm_problem_t<T> * prob){
             if(no_ref){
                 bench_result<T> rtn_opt = prob->run_single_case(cblas_sgemm_opt, validate_only);
@@ -493,6 +625,14 @@ public:
                 summary_func(prob, &rtn_ref, &rtn_opt);
             }
         };
+
+        dump_ctx_func(ctx);
+        assert( ((ctx->mc % ctx->mr) == 0) && ((ctx->nc % ctx->nr) == 0) &&
+                    "MC%%MR, NC%%NR must be zero\n");
+        
+        //printf("require: L1:%.1fKB(KC*NR*4), L2:%.1fKB(KC*MC*4), L3:%.1fKB(KC*NC*4)\n", req_l1()/1024.0, req_l2()/1024.0, req_l3()/1024.0);
+        printf("    M    N    K alpha beta   gflops(%%)   gflops_ref(%%)\n");
+
         while(1){
             if(one_shot){
                 gemm_problem_t<T> gemm_prob(ctx);
@@ -539,12 +679,12 @@ public:
 #define MEM_ALIGN_BYTE 32
 int main(int argc, char ** argv){
     arg_parser args("gemm");
-    args.insert_arg("m", "M value of gemm, int", "512");
-    args.insert_arg("n", "N value of gemm, int", "512");
-    args.insert_arg("k", "K value of gemm, int", "512");
-    args.insert_arg("lda", "leading dimension of a", "512");
-    args.insert_arg("ldb", "leading dimension of b", "512");
-    args.insert_arg("ldc", "leading dimension of c", "512");
+    args.insert_arg("m", "M value of gemm, int", "576");
+    args.insert_arg("n", "N value of gemm, int", "576");
+    args.insert_arg("k", "K value of gemm, int", "576");
+    args.insert_arg("lda", "leading dimension of a", "576");
+    args.insert_arg("ldb", "leading dimension of b", "576");
+    args.insert_arg("ldc", "leading dimension of c", "576");
     args.insert_arg("a", "ALPHA value of gemm, double", "1.0");
     args.insert_arg("b", "BETA value of gemm, double", "0");
     args.insert_arg("f", "CPU frequency, in MHz, double", "2600");

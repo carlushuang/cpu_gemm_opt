@@ -16,7 +16,7 @@
 
 #define ALIGN_SIZE 32
 
-
+#if 0
 extern "C"
 void sgemm_macro_kernel(
         int    mc,
@@ -60,6 +60,7 @@ void sgemm_macro_kernel(
         }
     }
 }
+#endif
 
 // C row major, A col major, B row major
 extern "C"
@@ -75,7 +76,35 @@ void sgemm_macro_kernel_n_tn(
         int    ldc,
         const gemm_context_t * ctx)
 {
+    int mr, nr, mr_size, nr_size;
+    int mm,nn;
+    int page_size;
 
+    mr = ctx->mr;
+    nr = ctx->nr;
+    page_size = ctx->page_size;
+
+    int offset_a = 0;
+    int offset_b = 0;
+
+    for(mm=0; mm<mc; mm += mr){
+        mr_size = MIN(mc-mm, mr);
+        offset_b = 0;
+        for(nn=0; nn<nc; nn += nr){
+            nr_size = MIN(nc-nn, nr);
+            sgemm_micro_kernel_n_tn(mr_size, nr_size, kc,
+                alpha,
+                packA + offset_a,
+                packB + offset_b,
+                beta,
+                C+mm*ldc+nn, ldc);
+            offset_b += nr*kc;
+        }
+
+        //offset_a += page_size / sizeof(float);
+        offset_a += mr*kc;
+        
+    }
 }
 
 // C col major, A col major, B row major
@@ -92,7 +121,6 @@ void sgemm_macro_kernel_t_tn(
         int    ldc,
         const gemm_context_t * ctx)
 {
-
 }
 
 static void scale_C(int mc, int nc, float beta, float * C, int ldc){
@@ -165,39 +193,59 @@ static void sgemm_n_nn(
     __aligned_free(A_pack);
     __aligned_free(B_pack);
 #endif
-    size_t nc, nc_size, kc, kc_size, mc, mc_size;
-    size_t p_mc, p_nc, p_kc;
-    p_mc = ctx->mc;
-    p_nc = ctx->nc;
-    p_kc = ctx->kc;
+    int nc, nc_size, kc, kc_size, mc, mc_size;
+    int mm, nn, kk;
+    int page_size;
+    int mr;
+    mr = ctx->mr;
+    mc = ctx->mc;
+    nc = ctx->nc;
+    kc = ctx->kc;
+    page_size = ctx->page_size;
 
-    float * A_pack = sgemm_alloc(IDENT_A_MATRIX, M, N, K, ctx);
-    float * B_pack = sgemm_alloc(IDENT_B_MATRIX, M, N, K, ctx);
+#if 0
+    // alloc A, A should align in one PAGE_SIZE for every mr*kc panel
+    int block_bytes = mr*kc*sizeof(float);
+    if(block_bytes > page_size){
+        std::cerr<<"size for a mr*kc block of A is bigger than page_size, not supported now."<<
+        ", mr:"<<mr<<", kc:"<<kc<<", page_size:"<<page_size<<std::endl;
+        assert(0);
+    }
+    int num_pages = (mc-1)/mr + 1;
+    float * A_pack = (float*)__aligned_malloc(num_pages * page_size, page_size);
+#endif
+    // alloc A
+    float * A_pack = (float*)__aligned_malloc(mc*kc*sizeof(float), page_size);
 
-    for(mc=0; mc<M; mc += p_mc){
-        mc_size = MIN(M-mc, p_mc);
-        for(kc=0; kc<K; kc += p_kc){
-            kc_size = MIN(K-kc, p_kc);
+    // alloc B
+    float * B_pack = (float*)__aligned_malloc(nc*kc*sizeof(float), page_size);
+
+    //printf("[%s] a num tlb:%d, bytes a:%lu, bytes b:%lu\n", __func__, num_pages, num_pages * page_size,nc*kc*sizeof(float) );
+
+    for(mm=0; mm<M; mm += mc){
+        mc_size = MIN(M-mm, mc);
+        for(kk=0; kk<K; kk += kc){
+            kc_size = MIN(K-kk, kc);
             sgemm_pack(LAYOUT_ROW_MAJOR, TRANS_NO_TRANS, IDENT_A_MATRIX,
                     mc_size, 0, kc_size,
-                    alpha, A + mc*lda + kc, lda, A_pack, ctx);
-            for(nc=0; nc<N; nc += p_nc){
-                nc_size = MIN(N-nc, p_nc);
+                    alpha, A + mm*lda + kk, lda, A_pack, ctx);
+            for(nn=0; nn<N; nn += nc){
+                nc_size = MIN(N-nn, nc);
                 sgemm_pack(LAYOUT_ROW_MAJOR, TRANS_NO_TRANS, IDENT_B_MATRIX,
                     0, nc_size, kc_size,
-                    alpha, B + kc*ldb + nc, ldb, B_pack, ctx);
+                    alpha, B + kk*ldb + nn, ldb, B_pack, ctx);
 
-                if( kc==0 )
-                    scale_C(mc_size, nc_size, beta, C+mc*ldc+nc, ldc);
+                if( kk==0 )
+                    scale_C(mc_size, nc_size, beta, C+mm*ldc+nn, ldc);
 
                 sgemm_macro_kernel_n_tn(mc_size, nc_size, kc_size,
                     alpha, A_pack, B_pack,
-                    beta, C+mc*ldc+nc, ldc, ctx);
+                    beta, C+mm*ldc+nn, ldc, ctx);
             }
         }
     }
-    sgemm_free(A_pack);
-    sgemm_free(B_pack);
+    __aligned_free(A_pack);
+    __aligned_free(B_pack);
 }
 
 static void sgemm_n_nt(

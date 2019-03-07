@@ -6,65 +6,132 @@
 #include <iostream>
 #include <assert.h>
 
-/*
-*    assume A is row major
-*    <-  kc ->
-*    +-------+      - 
-*    |       | mr   ^
-*    +-------+      |
-*    |       |
-*    +-------+
-*    |       |      mc
-*    +-------+
-*    |       |
-*    +-------+      |
-*    |       |      v
-*    +-------+      -
-* 
-*   pack_A
-*
-*    mr
-*  +---+
-*  |   | kc
-*  +---+
-*  |   | kc
-*
-* pack_A convert to col major for each tile
-*/
-extern "C"
-void pack_A(int mc_sz, int kc_sz, const float * A, int lda, float * pack_buf, float alpha){
-    int mr,mr_sz, k, i;
-    const float * ptr_a = A;
-    float * ptr_a_pack = pack_buf;
-    (void)alpha;
-    for(mr=0;mr<mc_sz;mr+=MR){
-        mr_sz = MIN(mc_sz-mr, MR);
-        for(k=0;k<kc_sz;k++){
-            ptr_a = A + mr*lda + k;
-            for(i=0;i<mr_sz;i++){
-                *ptr_a_pack++ = *ptr_a;
-                ptr_a += lda;
-            }
-        }
-    }
-}
 // https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html#AssemblerTemplate
 // symbol name should append '%='(assembler template) to avoid duplicate label in inline asm
 // such inline this function. support on gcc/clang
-extern "C"
-void sgemm_pack_nn_A_mr6(int m, int n, int k,
+
+/***************************************************************************
+ * packing for A
+ *
+ * we always look for the packing result of A as follow,
+ * no matter input layout of A:
+ *          (below layout is row major and dense, aka continuous in memory)
+ * 
+ *     MR
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ *
+ * if row major:
+ *  for each MR*KC of A, prefer addressable by 1 TLB entry (1 PAGE_SIZE and alignment)
+ * if col major:
+ *  no need TLB align
+ */
+
+/*
+*  sgemm_pack_n_a_n()
+*
+*        KC
+*  +-------------+     ^
+*  |             | MR  |
+*  +-------------+     |
+*  |             |
+*  +-------------+     MC
+*  |             |
+*  +-------------+     |
+*                      |
+*                      v
+*/
+static void sgemm_pack_n_a_n_generic(int mc, int nc, int kc,
     float alpha, const float * src,
-    int ld, float * dest)
+    int ld, float * dest, const gemm_context_t * ctx)
 {
-    unsigned long long k_itr = k/16;
-    unsigned long long k_rem = k%16;
-    unsigned long long m_itr = m/6;
-    unsigned long long m_rem = m%6;
+    int k_itr = kc/8;
+    int k_rem = kc%8;
+    int k;
+    int mr = ctx->mr;
+    //int mc = ctx->mc;
+    int m;
+    //int page_size = ctx->page_size;
+
+    //assert((mr*kc*sizeof(float) <= page_size) &&
+    //    "mr*kc block must small than page_size, other not support");
+
+    const float * s_ptr = src;
+    float * d_ptr = dest;
+    float v0, v1, v2, v3, v4, v5, v6, v7;
+    for(m=0;m<mc;m+=mr){
+        int mr_size = MIN(mc-m, mr);
+        int mm;
+        float * dcol = d_ptr;
+        for(mm=0; mm<mr_size; mm+=1){
+            
+            float * dd = dcol;
+            const float * ss = s_ptr;
+            for(k=0;k<k_itr;k++){
+                v0 = *ss;  ss++;
+                v1 = *ss;  ss++;
+                v2 = *ss;  ss++;
+                v3 = *ss;  ss++;
+                v4 = *ss;  ss++;
+                v5 = *ss;  ss++;
+                v6 = *ss;  ss++;
+                v7 = *ss;  ss++;
+
+                v0 *= alpha;
+                v1 *= alpha;
+                v2 *= alpha;
+                v3 *= alpha;
+                v4 *= alpha;
+                v5 *= alpha;
+                v6 *= alpha;
+                v7 *= alpha;
+
+                *dd = v0;  dd += mr_size;
+                *dd = v1;  dd += mr_size;
+                *dd = v2;  dd += mr_size;
+                *dd = v3;  dd += mr_size;
+                *dd = v4;  dd += mr_size;
+                *dd = v5;  dd += mr_size;
+                *dd = v6;  dd += mr_size;
+                *dd = v7;  dd += mr_size;
+            }
+            for(k=0;k<k_rem;k++){
+                v0 = *ss;  ss++;
+                *dd = v0;  dd += mr_size;
+            }
+            s_ptr += ld;
+            dcol ++;
+        }
+        //d_ptr += page_size/sizeof(float);
+        d_ptr += mr*kc;
+    }
+}
+#define PACK_A_MULTIPLE_ALPHA
+static void sgemm_pack_n_a_n_mr16(int mc, int nc, int kc,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+    unsigned long long k_itr = kc/16;
+    unsigned long long k_rem = kc%16;
+    unsigned long long m_itr = mc/6;
+    unsigned long long m_rem = mc%6;
     unsigned long long ld_ = ld;
-    (void)alpha;
-    (void)n;
-#if 1
+#ifdef PACK_A_MULTIPLE_ALPHA
+    float * alpha_addr = &alpha;
+#endif
+
     asm volatile(
+#ifdef PACK_A_MULTIPLE_ALPHA
+    "movq               %7,             %%r9        \n" // alpha
+    "vbroadcastss       (%%r9),         %%ymm15     \n"
+    "vbroadcastss       (%%r9),         %%xmm14     \n"
+#endif
     "movq               %0,             %%rax       \n" // src
     "movq               %1,             %%rbx       \n" // dest
     "movq               %2,             %%rcx       \n" // ld
@@ -102,6 +169,14 @@ void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "vmovups        (%%r14,%%r10,1),    %%ymm3      \n" // row 3
     "vmovups        (%%r14,%%rcx,4),    %%ymm4      \n" // row 4
     "vmovups        (%%r14,%%r11,1),    %%ymm5      \n" // row 5
+#ifdef PACK_A_MULTIPLE_ALPHA
+    "vmulps         %%ymm15,  %%ymm0,   %%ymm0      \n" // multiple alpha
+    "vmulps         %%ymm15,  %%ymm1,   %%ymm1      \n"
+    "vmulps         %%ymm15,  %%ymm2,   %%ymm2      \n"
+    "vmulps         %%ymm15,  %%ymm3,   %%ymm3      \n"
+    "vmulps         %%ymm15,  %%ymm4,   %%ymm4      \n"
+    "vmulps         %%ymm15,  %%ymm5,   %%ymm5      \n"
+#endif
                                                     // lsb                         msb
                                                     // origin:
                                                     // X00 X01 X02 X03 X04 X05 X06 X07
@@ -183,6 +258,14 @@ void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "vmovups        (%%r14,%%r10,1),    %%ymm3      \n" // row 3
     "vmovups        (%%r14,%%rcx,4),    %%ymm4      \n" // row 4
     "vmovups        (%%r14,%%r11,1),    %%ymm5      \n" // row 5
+#ifdef PACK_A_MULTIPLE_ALPHA
+    "vmulps         %%ymm15,  %%ymm0,   %%ymm0      \n"  // multiple alpha
+    "vmulps         %%ymm15,  %%ymm1,   %%ymm1      \n"
+    "vmulps         %%ymm15,  %%ymm2,   %%ymm2      \n"
+    "vmulps         %%ymm15,  %%ymm3,   %%ymm3      \n"
+    "vmulps         %%ymm15,  %%ymm4,   %%ymm4      \n"
+    "vmulps         %%ymm15,  %%ymm5,   %%ymm5      \n"
+#endif
                                                     // lsb                         msb
                                                     // origin:
                                                     // X00 X01 X02 X03 X04 X05 X06 X07
@@ -277,7 +360,14 @@ void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "vmovss         (%%r14, %%r10, 1),      %%xmm3  \n"
     "vmovss         (%%r14, %%rcx, 4),      %%xmm4  \n"
     "vmovss         (%%r14, %%r11, 1),      %%xmm5  \n"
-
+#ifdef PACK_A_MULTIPLE_ALPHA
+    "vmulss         %%xmm14,  %%xmm0,   %%xmm0      \n"
+    "vmulss         %%xmm14,  %%xmm1,   %%xmm1      \n"
+    "vmulss         %%xmm14,  %%xmm2,   %%xmm2      \n"
+    "vmulss         %%xmm14,  %%xmm3,   %%xmm3      \n"
+    "vmulss         %%xmm14,  %%xmm4,   %%xmm4      \n"
+    "vmulss         %%xmm14,  %%xmm5,   %%xmm5      \n"
+#endif
     "vmovss         %%xmm0,             (%%rbx)     \n"
     "vmovss         %%xmm1,          4*1(%%rbx)     \n"
     "vmovss         %%xmm2,          4*2(%%rbx)     \n"
@@ -329,7 +419,16 @@ void sgemm_pack_nn_A_mr6(int m, int n, int k,
     "vmovss         4*5(%%r14),         %%xmm5      \n"
     "vmovss         4*6(%%r14),         %%xmm6      \n"
     "vmovss         4*7(%%r14),         %%xmm7      \n"
-
+#ifdef PACK_A_MULTIPLE_ALPHA
+    "vmulss         %%xmm14,  %%xmm0,   %%xmm0      \n"
+    "vmulss         %%xmm14,  %%xmm1,   %%xmm1      \n"
+    "vmulss         %%xmm14,  %%xmm2,   %%xmm2      \n"
+    "vmulss         %%xmm14,  %%xmm3,   %%xmm3      \n"
+    "vmulss         %%xmm14,  %%xmm4,   %%xmm4      \n"
+    "vmulss         %%xmm14,  %%xmm5,   %%xmm5      \n"
+    "vmulss         %%xmm14,  %%xmm6,   %%xmm6      \n"
+    "vmulss         %%xmm14,  %%xmm7,   %%xmm7      \n"
+#endif
     "vmovss         %%xmm0,             (%%r8)      \n"
     "vmovss         %%xmm1,   (%%r8, %%r9,  1)      \n"
     "vmovss         %%xmm2,   (%%r8, %%r9,  2)      \n"
@@ -351,6 +450,9 @@ void sgemm_pack_nn_A_mr6(int m, int n, int k,
 
     ".LOOP_K_REM_IN_M%=:                            \n"
     "vmovss         (%%r14),            %%xmm0      \n"
+#ifdef PACK_A_MULTIPLE_ALPHA
+    "vmulss         %%xmm14,  %%xmm0,   %%xmm0      \n"
+#endif
     "vmovss         %%xmm0,             (%%r8)      \n"
     "addq           $4,                 %%r14       \n"
     "leaq           (%%r8,%%r9,1),      %%r8        \n"
@@ -376,281 +478,136 @@ void sgemm_pack_nn_A_mr6(int m, int n, int k,
         "m"(k_rem),     // 4
         "m"(m_itr),     // 5
         "m"(m_rem)      // 6
+#ifdef PACK_A_MULTIPLE_ALPHA
+        ,"m"(alpha_addr) // 7
+#endif
     : // clobber
         "rax","rbx","rcx","rdx","rsi","rdi",
         "r8","r9","r10","r11","r12","r13","r14","r15",
-        "xmm0","xmm1","xmm2","xmm3","xmm4","xmm5",
+        "xmm0","xmm1","xmm2","xmm3","xmm4","xmm5","xmm6","xmm7","xmm8","xmm14",
         "ymm0","ymm1","ymm2","ymm3","ymm4","ymm5","ymm6",
         "ymm7","ymm8","ymm9","ymm10","ymm11","ymm12","ymm13",
         "ymm14","ymm15"
     );
-#endif
+}
+static void sgemm_pack_n_a_n(int mc, int nc, int kc,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+    if(ctx->mr == 6){
+        return sgemm_pack_n_a_n_mr16(mc, nc, kc, alpha, src, ld, dest, ctx);
+    }
+    return sgemm_pack_n_a_n_generic(mc, nc, kc, alpha, src, ld, dest, ctx);
+}
+static void sgemm_pack_n_a_t(int mc, int nc, int kc,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
 }
 
-extern "C"
-void sgemm_pack_nn_a(int m, int n, int k,
+static void sgemm_pack_t_a_n(int mc, int nc, int kc,
     float alpha, const float * src,
-    int ld, float * dest)
+    int ld, float * dest, const gemm_context_t * ctx)
 {
-    if(MR==6)
-        return sgemm_pack_nn_A_mr6(m,n,k,alpha,src,ld,dest);
-    pack_A(m,k,src,ld,dest,alpha);
+
 }
+
+static void sgemm_pack_t_a_t(int mc, int nc, int kc,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{
+
+}
+
+/***************************************************************************
+ * packing for B
+ *
+ * we always look for the packing result of B as follow,
+ * no matter input layout of B:
+ *          (below layout is row major and dense, aka continuous in memory)
+ * 
+ *     NR
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ *   |    | KC
+ *   +----+
+ *   |    |
+ * 
+ * if row major:
+ *  no need TLB align
+ * if col major:
+ *  for each NR*KC of B, prefer addressable by 1 TLB entry (1 PAGE_SIZE and alignment)
+ */
+
 /*
-*  assume B is row major
-*  input B block:
-*  <-------- nc ------->
-*  < nr>
-*  +---+---+---+---+---+
-*  |   |   |   |   |   |kc
-*  |   |   |   |   |   |
-*  +---+---+---+---+---+
-*    |
-*    v
-*  pack_B
+* sgemm_pack_n_b_n(), B no page alignment
 *
-*   nr
-*  +---+
-*  |   | kc
-*  +---+
-*  |   |
-*  +---+
-*
+*   <--   NC   -->
+*     NR
+*   +---+---+---+
+*   |   |   |
+* KC|   |   |
+*   +---+---+---+
 */
-extern "C"
-void pack_B(int nc_sz, int kc_sz, const float * B, int ldb, float * pack_buf, float alpha){
-    int k, nr, nr_sz, i;
-    const float * ptr_b = B;
-    float * ptr_b_pack = pack_buf;
-    for(nr=0;nr<nc_sz;nr+=NR){
-        nr_sz = MIN(nc_sz-nr, NR);
-        for(k=0;k<kc_sz;k++){
-            ptr_b = B + k*ldb + nr;
-            for(i=0;i<nr_sz;i++){
-                *ptr_b_pack++ = *ptr_b++ * alpha;
+static void sgemm_pack_n_b_n_generic(int mc, int nc, int kc,
+    float alpha, const float * src,
+    int ld, float * dest, const gemm_context_t * ctx)
+{ 
+    //int k_itr = kc/8;
+    //int k_rem = kc%8;
+    int k;
+    int nr = ctx->nr;
+    //int nc = ctx->nc;
+    int n;
+    //int page_size = ctx->page_size;
+
+    //assert((nr*kc*sizeof(float) <= page_size) &&
+    //    "nr*kc B block must small than page_size, other not support");
+    const float * s_ptr = src;
+    float * d_ptr = dest;
+    float v;
+    for(n=0; n<nc; n+=nr){
+        int nr_size = MIN(nc-n, nr);
+        int nn;
+        const float * sline = s_ptr;
+        float * dline = d_ptr;
+        
+        for(k=0;k<kc;k++){
+            const float * ss = sline;
+            float * dd = dline;
+            for(nn=0; nn<nr_size; nn++){
+                v = *ss;  ss++;
+                *dd = v;  dd++;
             }
+            sline += ld;
+            dline += nr_size;
         }
+
+        s_ptr += nr_size;
+        //d_ptr += page_size/sizeof(float);
+        d_ptr += nr*kc;
+
     }
 }
-extern "C"
-void sgemm_pack_nn_b_nr8(int m, int n, int k,
+//#define PACK_B_MULTIPLE_ALPHA
+static void sgemm_pack_n_b_n_nr16(int mc, int nc, int kc,
     float alpha, const float * src,
-    int ld, float * dest)
+    int ld, float * dest, const gemm_context_t * ctx)
 {
-    assert(NR==8 && "mx8 kernel pack B");
-    (void)m;
+    assert(ctx->nr==16 && "mx16 kernel pack B");
+    unsigned long long n_itr = nc/16;    // NR
+    unsigned long long n_rem = nc%16;
 
-    int n_itr = n/8;    // NR
-    int n_rem = n%8;
-
-    int k_itr = k/8;    // copy every eight row
-    int k_rem = k%8;
-
-    int i,j;
-
-    __m256 ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7;
-    __m256 ymm_alpha;
-    ymm_alpha = _mm256_broadcast_ss(&alpha);
-
-    const float * src_ptr;
-    float * dest_ptr = dest;
-    for(i=0;i<n_itr;i++){
-        src_ptr = src + i*8;
-        for(j=0;j<k_itr;j++){
-            // load
-            ymm0 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm1 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm2 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm3 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm4 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm5 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm6 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm7 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            // scale
-            ymm0 = _mm256_mul_ps(ymm0, ymm_alpha);
-            ymm1 = _mm256_mul_ps(ymm1, ymm_alpha);
-            ymm2 = _mm256_mul_ps(ymm2, ymm_alpha);
-            ymm3 = _mm256_mul_ps(ymm3, ymm_alpha);
-            ymm4 = _mm256_mul_ps(ymm4, ymm_alpha);
-            ymm5 = _mm256_mul_ps(ymm5, ymm_alpha);
-            ymm6 = _mm256_mul_ps(ymm6, ymm_alpha);
-            ymm7 = _mm256_mul_ps(ymm7, ymm_alpha);
-            // store
-            _mm256_storeu_ps(dest_ptr, ymm0); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm1); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm2); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm3); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm4); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm5); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm6); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm7); dest_ptr += 8;
-        }
-        for(j=0;j<k_rem;j++){
-            ymm0 = _mm256_loadu_ps(src_ptr); src_ptr += ld;
-            ymm0 = _mm256_mul_ps(ymm0, ymm_alpha);
-            _mm256_storeu_ps(dest_ptr, ymm0); dest_ptr += 8;
-        }
-    }
-    // final case, copy column one by one
-    float k0, k1, k2, k3, k4, k5, k6, k7;
-    src = src + n_itr*8;
-    dest = dest + k_itr*8;
-    for(i=0;i<n_rem;i++){
-        src_ptr = src + i;
-        dest_ptr = dest + i;
-        for(j=0;j<k_itr;j++){
-            // load 
-            k0 = *src_ptr; src_ptr += ld;
-            k1 = *src_ptr; src_ptr += ld;
-            k2 = *src_ptr; src_ptr += ld;
-            k3 = *src_ptr; src_ptr += ld;
-            k4 = *src_ptr; src_ptr += ld;
-            k5 = *src_ptr; src_ptr += ld;
-            k6 = *src_ptr; src_ptr += ld;
-            k7 = *src_ptr; src_ptr += ld;
-            // scale
-            k0 *= alpha;
-            k1 *= alpha;
-            k2 *= alpha;
-            k3 *= alpha;
-            k4 *= alpha;
-            k5 *= alpha;
-            k6 *= alpha;
-            k7 *= alpha;
-            // store
-            *dest_ptr = k0; dest_ptr+=n_rem;
-            *dest_ptr = k1; dest_ptr+=n_rem;
-            *dest_ptr = k2; dest_ptr+=n_rem;
-            *dest_ptr = k3; dest_ptr+=n_rem;
-            *dest_ptr = k4; dest_ptr+=n_rem;
-            *dest_ptr = k5; dest_ptr+=n_rem;
-            *dest_ptr = k6; dest_ptr+=n_rem;
-            *dest_ptr = k7; dest_ptr+=n_rem;
-        }
-        for(j=0;j<k_rem;j++){
-            k0 = *src_ptr; src_ptr += ld;
-            k0 *= alpha;
-            *dest_ptr = k0; dest_ptr+=n_rem;
-        }
-    }
-}
-#if 0
-extern "C"
-void sgemm_pack_nn_b_nr16(int m, int n, int k,
-    float alpha, const float * src,
-    int ld, float * dest)
-{
-    assert(NR==16 && "mx16 kernel pack B");
-    (void)m;
-
-    int n_itr = n/16;    // NR
-    int n_rem = n%16;
-
-    int k_itr = k/4;    // copy every 4 row
-    int k_rem = k%4;
-
-    int i,j;
-
-    __m256 ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7;
-    __m256 ymm_alpha;
-    ymm_alpha = _mm256_broadcast_ss(&alpha);
-
-    const float * src_ptr;
-    float * dest_ptr = dest;
-    for(i=0;i<n_itr;i++){
-        src_ptr = src + i*16;
-        for(j=0;j<k_itr;j++){
-            // load
-            ymm0 = _mm256_loadu_ps(src_ptr);
-            ymm1 = _mm256_loadu_ps(src_ptr+8);
-            src_ptr += ld;
-            ymm2 = _mm256_loadu_ps(src_ptr);
-            ymm3 = _mm256_loadu_ps(src_ptr+8);
-            src_ptr += ld;
-            ymm4 = _mm256_loadu_ps(src_ptr);
-            ymm5 = _mm256_loadu_ps(src_ptr+8);
-            src_ptr += ld;
-            ymm6 = _mm256_loadu_ps(src_ptr);
-            ymm7 = _mm256_loadu_ps(src_ptr+8);
-            src_ptr += ld;
-            // scale
-            ymm0 = _mm256_mul_ps(ymm0, ymm_alpha);
-            ymm1 = _mm256_mul_ps(ymm1, ymm_alpha);
-            ymm2 = _mm256_mul_ps(ymm2, ymm_alpha);
-            ymm3 = _mm256_mul_ps(ymm3, ymm_alpha);
-            ymm4 = _mm256_mul_ps(ymm4, ymm_alpha);
-            ymm5 = _mm256_mul_ps(ymm5, ymm_alpha);
-            ymm6 = _mm256_mul_ps(ymm6, ymm_alpha);
-            ymm7 = _mm256_mul_ps(ymm7, ymm_alpha);
-            // store
-            _mm256_storeu_ps(dest_ptr, ymm0); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm1); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm2); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm3); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm4); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm5); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm6); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm7); dest_ptr += 8;
-        }
-        for(j=0;j<k_rem;j++){
-            ymm0 = _mm256_loadu_ps(src_ptr);
-            ymm1 = _mm256_loadu_ps(src_ptr+8); src_ptr += ld;
-            ymm0 = _mm256_mul_ps(ymm0, ymm_alpha);
-            ymm1 = _mm256_mul_ps(ymm1, ymm_alpha);
-            _mm256_storeu_ps(dest_ptr, ymm0); dest_ptr += 8;
-            _mm256_storeu_ps(dest_ptr, ymm1); dest_ptr += 8;
-        }
-    }
-    // final case, copy column one by one
-    float k0, k1, k2, k3;
-    src = src + n_itr*16;
-    dest = dest + k_itr*4;
-    for(i=0;i<n_rem;i++){
-        src_ptr = src + i;
-        dest_ptr = dest + i;
-        for(j=0;j<k_itr;j++){
-            // load 
-            k0 = *src_ptr; src_ptr += ld;
-            k1 = *src_ptr; src_ptr += ld;
-            k2 = *src_ptr; src_ptr += ld;
-            k3 = *src_ptr; src_ptr += ld;
-
-            // scale
-            k0 *= alpha;
-            k1 *= alpha;
-            k2 *= alpha;
-            k3 *= alpha;
-
-            // store
-            *dest_ptr = k0; dest_ptr+=n_rem;
-            *dest_ptr = k1; dest_ptr+=n_rem;
-            *dest_ptr = k2; dest_ptr+=n_rem;
-            *dest_ptr = k3; dest_ptr+=n_rem;
-        }
-        for(j=0;j<k_rem;j++){
-            k0 = *src_ptr; src_ptr += ld;
-            k0 *= alpha;
-            *dest_ptr = k0; dest_ptr+=n_rem;
-        }
-    }
-}
-#endif
-#if 1
-#define PACK_B_MULTIPLE_ALPHA
-extern "C"
-void sgemm_pack_nn_b_nr16(int m, int n, int k,
-    float alpha, const float * src,
-    int ld, float * dest)
-{
-    assert(NR==16 && "mx16 kernel pack B");
-    (void)m;
-    unsigned long long n_itr = n/16;    // NR
-    unsigned long long n_rem = n%16;
-
-    unsigned long long k_itr = k/8;    // copy every 8 row
-    unsigned long long k_rem = k%8;
+    unsigned long long k_itr = kc/8;    // copy every 8 row
+    unsigned long long k_rem = kc%8;
     unsigned long long ld_  = ld;
+#ifdef PACK_B_MULTIPLE_ALPHA
     float * alpha_addr = &alpha;
+#endif
 
     asm volatile(
     "movq               %0,             %%rax       \n" // src
@@ -660,8 +617,8 @@ void sgemm_pack_nn_b_nr16(int m, int n, int k,
     "movq               %4,             %%rdi       \n" // k_rem
     "movq               %5,             %%r8        \n" // n_itr
     "movq               %6,             %%r9        \n" // n_rem
-    "movq               %7,             %%r10       \n" // alpha_addr
 #ifdef PACK_B_MULTIPLE_ALPHA
+    "movq               %7,             %%r10       \n" // alpha_addr
     "vbroadcastss       (%%r10),        %%ymm15     \n" // alpha
 #endif
     // n_itr
@@ -865,8 +822,10 @@ void sgemm_pack_nn_b_nr16(int m, int n, int k,
         "m"(k_itr),     // 3
         "m"(k_rem),     // 4
         "m"(n_itr),     // 5
-        "m"(n_rem),     // 6
-        "m"(alpha_addr) // 7
+        "m"(n_rem)      // 6
+#ifdef PACK_B_MULTIPLE_ALPHA
+        , "m"(alpha_addr) // 7
+#endif
     : // clobber list
         "rax","rbx","rcx","rdx","rsi","rdi",
         "r8","r9","r10","r11","r12","r13","r14","r15",
@@ -876,136 +835,23 @@ void sgemm_pack_nn_b_nr16(int m, int n, int k,
         "ymm14","ymm15"
     );
 }
-#endif
-extern "C"
-void sgemm_pack_nn_b(int m, int n, int k,
+static void sgemm_pack_n_b_n(int mc, int nc, int kc,
     float alpha, const float * src,
-    int ld, float * dest)
+    int ld, float * dest, const gemm_context_t * ctx)
 {
-
-    if(NR==8)
-        return sgemm_pack_nn_b_nr8(m,n,k,alpha,src,ld,dest);
-    if(NR==16)
-        return sgemm_pack_nn_b_nr16(m,n,k,alpha,src,ld,dest);
-    return pack_B(n,k,src,ld,dest,alpha);
-}
-
-
-
-
-/***************************************************************************
- * packing for A
- *
- * we always look for the packing result of A as follow,
- * no matter input layout of A:
- *          (below layout is row major and dense, aka continuous in memory)
- * 
- *     MR
- *   +----+
- *   |    |
- *   |    | KC
- *   +----+
- *   |    |
- *   |    | KC
- *   +----+
- *   |    |
- * 
- *  for each MR*KC of A, prefer addressable by 1 TLB entry (1 PAGE_SIZE and alignment)
- */
-static float * sgemm_alloc_a(int m, int n, int k, const gemm_context_t * ctx){
-    size_t mr, kc, page_size;
-    mr = ctx->mr;
-    kc = ctx->kc;
-    page_size = ctx->page_size;
-
-    size_t block_bytes = mr*kc*sizeof(float);
-    if(block_bytes > page_size){
-        std::cerr<<"size for a mr*kc block is bigger than page_size, not supported now."<<
-        ", mr:"<<mr<<", kc:"<<kc<<", page_size:"<<page_size<<std::endl;
-        assert(0);
+    if(ctx->nr == 16){
+        return sgemm_pack_n_b_n_nr16(mc,nc,kc,alpha,src,ld,dest,ctx);
     }
-
-    assert(k);
-    size_t num_pages = ((size_t)k-1)/kc+1; // every mr*kc need align to PAGE_SIZE
-    return (float*)__aligned_malloc(num_pages * page_size, page_size);
+    return sgemm_pack_n_b_n_generic(mc,nc,kc,alpha,src,ld,dest,ctx);
 }
-static void sgemm_pack_n_a_n(int m, int n, int k,
-    float alpha, const float * src,
-    int ld, float * dest, const gemm_context_t * ctx)
-{
-
-}
-static void sgemm_pack_n_a_t(int m, int n, int k,
+static void sgemm_pack_n_b_t(int mc, int nc, int kc,
     float alpha, const float * src,
     int ld, float * dest, const gemm_context_t * ctx)
 {
 
 }
 
-static void sgemm_pack_t_a_n(int m, int n, int k,
-    float alpha, const float * src,
-    int ld, float * dest, const gemm_context_t * ctx)
-{
-
-}
-
-static void sgemm_pack_t_a_t(int m, int n, int k,
-    float alpha, const float * src,
-    int ld, float * dest, const gemm_context_t * ctx)
-{
-
-}
-
-/***************************************************************************
- * packing for B
- *
- * we always look for the packing result of B as follow,
- * no matter input layout of B:
- *          (below layout is row major and dense, aka continuous in memory)
- * 
- *     NR
- *   +----+
- *   |    |
- *   |    | KC
- *   +----+
- *   |    |
- *   |    | KC
- *   +----+
- *   |    |
- * 
- * for each NR*KC of B, prefer addressable by 1 TLB entry (1 PAGE_SIZE and alignment)
- */
-static float * sgemm_alloc_b(int m, int n, int k, const gemm_context_t * ctx){
-    size_t nr, kc, page_size;
-    nr = ctx->nr;
-    kc = ctx->kc;
-    page_size = ctx->page_size;
-
-    size_t block_bytes = nr*kc*sizeof(float);
-    if(block_bytes > page_size){
-        std::cerr<<"size for a nr*kc block is bigger than page_size, not supported now."<<
-        ", nr:"<<nr<<", kc:"<<kc<<", page_size:"<<page_size<<std::endl;
-        assert(0);
-    }
-
-    assert(k);
-    size_t num_pages = ((size_t)k-1)/kc+1; // every nr*kc need align to PAGE_SIZE
-    return (float*)__aligned_malloc(num_pages * page_size, page_size);
-}
-static void sgemm_pack_n_b_n(int m, int n, int k,
-    float alpha, const float * src,
-    int ld, float * dest, const gemm_context_t * ctx)
-{
-    
-}
-static void sgemm_pack_n_b_t(int m, int n, int k,
-    float alpha, const float * src,
-    int ld, float * dest, const gemm_context_t * ctx)
-{
-
-}
-
-static void sgemm_pack_t_b_n(int m, int n, int k,
+static void sgemm_pack_t_b_n(int mc, int nc, int kc,
     float alpha, const float * src,
     int ld, float * dest, const gemm_context_t * ctx)
 {
@@ -1013,7 +859,7 @@ static void sgemm_pack_t_b_n(int m, int n, int k,
 }
 
 
-static void sgemm_pack_t_b_t(int m, int n, int k,
+static void sgemm_pack_t_b_t(int mc, int nc, int kc,
     float alpha, const float * src,
     int ld, float * dest, const gemm_context_t * ctx)
 {
@@ -1028,6 +874,7 @@ static void sgemm_pack_t_b_t(int m, int n, int k,
 */
 
 // https://software.intel.com/en-us/mkl-developer-reference-c-cblas-gemm-alloc
+#if 0
 extern "C"
 float * sgemm_alloc(identifier_t ident, int m, int n, int k, const gemm_context_t * ctx)
 {
@@ -1041,11 +888,12 @@ extern "C"
 void sgemm_free(float * buf){
     __aligned_free((void*)buf);
 }
+#endif
 
 //https://software.intel.com/en-us/mkl-developer-reference-c-cblas-gemm-pack
 extern "C"
 void sgemm_pack(layout_t layout, trans_t trans, identifier_t ident,
-    int m, int n, int k,
+    int mc, int nc, int kc,
     float alpha, const float * src,
     int ld, float * dest, const gemm_context_t * ctx)
 {
@@ -1064,29 +912,29 @@ void sgemm_pack(layout_t layout, trans_t trans, identifier_t ident,
     if(ident == IDENT_A_MATRIX){
         if(layout == LAYOUT_ROW_MAJOR){
             if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
-                sgemm_pack_n_a_n(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_n_a_n(mc,nc,kc,alpha,src,ld,dest,ctx);
             }else{
-                sgemm_pack_n_a_t(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_n_a_t(mc,nc,kc,alpha,src,ld,dest,ctx);
             }
         }else{
             if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
-                sgemm_pack_t_a_t(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_t_a_t(mc,nc,kc,alpha,src,ld,dest,ctx);
             }else{
-                sgemm_pack_t_a_n(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_t_a_n(mc,nc,kc,alpha,src,ld,dest,ctx);
             }
         }
     }else{
         if(layout == LAYOUT_ROW_MAJOR){
             if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
-                sgemm_pack_n_b_n(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_n_b_n(mc,nc,kc,alpha,src,ld,dest,ctx);
             }else{
-                sgemm_pack_n_b_t(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_n_b_t(mc,nc,kc,alpha,src,ld,dest,ctx);
             }
         }else{
             if(trans == TRANS_NO_TRANS || trans == TRANS_CONJ_NO_TRANS){
-                sgemm_pack_t_b_t(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_t_b_t(mc,nc,kc,alpha,src,ld,dest,ctx);
             }else{
-                sgemm_pack_t_b_n(m,n,k,alpha,src,ld,dest,ctx);
+                sgemm_pack_t_b_n(mc,nc,kc,alpha,src,ld,dest,ctx);
             }
         }
     }
