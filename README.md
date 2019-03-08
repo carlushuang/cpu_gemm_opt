@@ -7,6 +7,9 @@ optimize gemm on x86 arch, tested on **Intel(R) Xeon(R) Gold 6142** CPU, single 
 * L3 cache:              22528K
 
 most of the size exceed [openblas](https://github.com/xianyi/OpenBLAS)(0.3.4)
+![](res/x86_64_compare.jpg)
+
+also, check [this PDF](res/cpu_gemm.pdf) to have a detail look at how to design the blocking.
 
 ```
 # 6x16 micro kernel
