@@ -17,8 +17,8 @@ detail is in [this PDF](res/cpu_gemm.pdf) for how to design the blocking/kernel.
 
 some reference resource on gemm:
 
-* [Anatomy of a high-performance matrix multiplication](www.cs.utexas.edu/users/pingali/CS378/2008sp/papers/gotoPaper.pdf)
-* [A Family of High-Performance Matrix Multiplication Algorithms](www.cs.utexas.edu/~pingali/CS395T/2012sp/papers/MMMvdg.pdf)
+* [Anatomy of a high-performance matrix multiplication](https://www.cs.utexas.edu/users/pingali/CS378/2008sp/papers/gotoPaper.pdf)
+* [A Family of High-Performance Matrix Multiplication Algorithms](https://www.cs.utexas.edu/~pingali/CS395T/2012sp/papers/MMMvdg.pdf)
 * [blislab](https://github.com/flame/blis)
 
 ```
