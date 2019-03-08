@@ -1,19 +1,23 @@
 # gemm_opt
 
-optimize gemm on x86 arch, tested on **Intel(R) Xeon(R) Gold 6142** CPU, single core
+*currently only consider signle cpu core.*
+
+optimize gemm on x86 arch, tested on **Intel(R) Xeon(R) Gold 6142** CPU
 * L1d cache:             32K
 * L1i cache:             32K
 * L2 cache:              1024K
 * L3 cache:              22528K
+* L1d TLB :              64 entries
 
 most of the size exceed [openblas](https://github.com/xianyi/OpenBLAS)(0.3.4)
 
 ![](res/x86_64_compare.jpg)
 
-also, check [this PDF](res/cpu_gemm.pdf) to have a detail look at how to design the blocking.
+detail is in [this PDF](res/cpu_gemm.pdf) for how to design the blocking/kernel.
 
 ```
 # 6x16 micro kernel
+# need disable intel HT(hyperthread) in BIOS. also, frequency boost is prefered to close.
 # ./gemm_driver  -kc 360 -nc 672 -mc 3072
 
 cpu:2, freq: 2600.0MHz, theoritical: 81.250 gflops (avx256,fmadd)
