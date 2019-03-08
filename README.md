@@ -1,6 +1,6 @@
 # gemm_opt
 
-*currently only consider signle cpu core.*
+*currently only consider signle cpu core, and sgemm only*
 
 optimize gemm on x86 arch, tested on **Intel(R) Xeon(R) Gold 6142** CPU
 * L1d cache:             32K
@@ -14,6 +14,12 @@ most of the size exceed [openblas](https://github.com/xianyi/OpenBLAS)(0.3.4)
 ![](res/x86_64_compare.jpg)
 
 detail is in [this PDF](res/cpu_gemm.pdf) for how to design the blocking/kernel.
+
+some reference resource on gemm:
+
+* [Anatomy of a high-performance matrix multiplication](www.cs.utexas.edu/users/pingali/CS378/2008sp/papers/gotoPaper.pdf)
+* [A Family of High-Performance Matrix Multiplication Algorithms](www.cs.utexas.edu/~pingali/CS395T/2012sp/papers/MMMvdg.pdf)
+* [blislab](https://github.com/flame/blis)
 
 ```
 # 6x16 micro kernel
