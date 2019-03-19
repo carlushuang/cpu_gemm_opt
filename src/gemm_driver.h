@@ -10,12 +10,17 @@
 #include <algorithm>
 #include <assert.h>
 #include <iostream>
+#include <sstream>
 #include <vector>
 // openblas
 #include <cblas.h>
 
 #ifndef CEIL
 #define CEIL(value, divider)  (   ((value)-1)/(divider)+1  )
+#endif
+
+#ifndef CEIL_WRAP
+#define CEIL_WRAP(value, divider)  ( CEIL((value), (divider)) * (divider)  )
 #endif
 
 typedef enum {
@@ -115,6 +120,97 @@ public:
     std::vector<int>    cpu_list;
 
     double      frequency;  // MHz
+
+    bool        cur_use_tuned {false};  // use tuned param from db or default, only a flag
+
+    void serialize_layout_trans(std::ostream & os){
+        std::string al, bl, cl;
+        if(layout == LAYOUT_ROW_MAJOR){
+            cl = "cr";
+            if(trans_a == TRANS_NO_TRANS || trans_a == TRANS_CONJ_NO_TRANS){
+                al = "ar";
+            }else{
+                al = "ac";
+            }
+            if(trans_b == TRANS_NO_TRANS || trans_b == TRANS_CONJ_NO_TRANS){
+                bl = "br";
+            }else{
+                bl = "bc";
+            }
+        }else{
+            cl = "cc";
+            if(trans_a == TRANS_NO_TRANS || trans_a == TRANS_CONJ_NO_TRANS){
+                al = "ac";
+            }else{
+                al = "ar";
+            }
+            if(trans_b == TRANS_NO_TRANS || trans_b == TRANS_CONJ_NO_TRANS){
+                bl = "bc";
+            }else{
+                bl = "br";
+            }
+        }
+        os<<al<<"-"<<bl<<"-"<<cl;
+    }
+
+    void deserialize_layout_trans(const std::istream & is){
+        std::string al, bl, cl;
+        std::stringstream tmp;
+        tmp << is.rdbuf();
+        std::string s( tmp.str() );
+
+        al = s.substr(0, 2);
+        bl = s.substr(3, 2);
+        cl = s.substr(6, 2);
+
+        if(cl == "cr"){
+            layout = LAYOUT_ROW_MAJOR;
+            if(al == "ar"){
+                trans_a = TRANS_NO_TRANS;
+            }else{
+                trans_a = TRANS_TRANS;
+            }
+            if(bl == "br"){
+                trans_b = TRANS_NO_TRANS;
+            }else{
+                trans_b = TRANS_TRANS;
+            }
+        }else if(cl == "cc"){
+            layout = LAYOUT_COL_MAJOR;
+            if(al == "ar"){
+                trans_a = TRANS_TRANS;
+            }else{
+                trans_a = TRANS_NO_TRANS;
+            }
+            if(bl == "br"){
+                trans_b = TRANS_TRANS;
+            }else{
+                trans_b = TRANS_NO_TRANS;
+            }
+        }
+    }
+
+    // TODO: fix more param
+    void serialize(std::ostream & os){
+        serialize_layout_trans(os);
+        os<<"-"<<m<<"-"<<n<<"-"<<k;
+    }
+    void serialize(std::string & str){
+        std::ostringstream oss;
+        serialize(oss);
+        str = oss.str();
+    }
+    void deserialize(std::istream & is){
+        char _d;
+
+        deserialize_layout_trans(is);
+        is>>_d>>m>>_d>>n>>_d>>k;
+    }
+    void deserialize(std::string & str){
+        std::istringstream iss;
+        iss.str(str);
+        deserialize(iss);
+    }
 };
 
 // https://software.intel.com/en-us/mkl-developer-reference-c-cblas-gemm
