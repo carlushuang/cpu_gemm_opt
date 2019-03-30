@@ -21,6 +21,10 @@ some reference resource on gemm:
 * [A Family of High-Performance Matrix Multiplication Algorithms](https://www.cs.utexas.edu/~pingali/CS395T/2012sp/papers/MMMvdg.pdf)
 * [blislab](https://github.com/flame/blis)
 
+notes: 
+* 96% cpu usage perf is achieved by tune the parameter. wait for tuning finish to update following chart
+* more fine grain optimization for micro kernel is needed for better perf above 96%, target 98%~99%
+
 ```
 # 6x16 micro kernel
 # need disable intel HT(hyperthread) in BIOS. also, frequency boost is prefered to close.
